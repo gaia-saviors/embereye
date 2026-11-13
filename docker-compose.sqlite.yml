@@ -1,0 +1,44 @@
+# EmberEye - OPTION (a): run the stack against the host's SQLite file.
+#
+# Use when the real FIRMS backfill lives in embereye_dev.db and you want the
+# app to serve THAT data without a Postgres migration (zero data movement,
+# see docs/DATA.md for when to prefer option b / scripts/sqlite_to_postgres.py).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
+#
+# Notes:
+#   * SEEDER DISABLED - the app starts against your real data, nothing is
+#     seeded, nothing is mixed.
+#   * The SQLite file is mounted READ-WRITE at /data/embereye_dev.db; the
+#     journal mode drops to DELETE via EMBEREBEYE_SQLITE_JOURNAL (WAL can
+#     misbehave on some Windows-host bind mounts). Put the file somewhere
+#     without an active writer before `up`.
+#   * Point EMBEREBEYE_SQLITE_HOST_PATH at a different file if needed:
+#       $env:EMBEREBEYE_SQLITE_HOST_PATH = "C:\path\to\embereye_dev.db"
+#
+# The seeder guard (v1.0.4) would refuse to seed this database anyway - this
+# override simply removes the ambiguity.
+
+services:
+  db:
+    # Not needed in SQLite mode; keep the service defined but idle so the
+    # base compose file stays authoritative for ports/volumes.
+    restart: "no"
+
+  seeder:
+    command: ["python", "-c",
+              "print('seeder disabled by docker-compose.sqlite.yml - serving the host SQLite file')"]
+    restart: "no"
+
+  backend:
+    user: "0:0"
+    environment:
+      EMBEREBEYE_DATABASE_URL: sqlite:////data/embereye_dev.db
+      EMBEREBEYE_SQLITE_JOURNAL: ${EMBEREBEYE_SQLITE_JOURNAL:-DELETE}
+    volumes:
+      - ${EMBEREBEYE_SQLITE_HOST_PATH:-./embereye_dev.db}:/data/embereye_dev.db
+      - ./scripts:/srv/scripts:ro
+      - ./scripts:/app/scripts:ro
+
+  frontend:
+    # unchanged - proxies /api to backend as usual

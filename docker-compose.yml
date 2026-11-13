@@ -1,0 +1,109 @@
+# EmberEye - Harmonization of MODIS & VIIRS Hot Spots
+# Gaia Saviors - NASA Space Apps Challenge 2026
+#
+# Full stack: PostgreSQL + auto-seeding + FastAPI backend + nginx-served SPA.
+#   docker compose up --build
+#
+# Services:
+#   db        PostgreSQL 16 with health check (data persisted in named volume)
+#   backend   FastAPI harmonization + query API (waits for db health)
+#   seeder    One-shot job: ingests data (FIRMS if reachable, calibrated
+#             deterministic seed archive otherwise) and runs the full
+#             harmonization pipeline. Exits 0 when done.
+#   frontend  nginx serving the built SPA and proxying /api -> backend
+
+name: embereye
+
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  environment: &backend-env
+    # --- database ---
+    EMBEREBEYE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-embereye}:${POSTGRES_PASSWORD:-embereye_dev_pw}@db:5432/${POSTGRES_DB:-embereye}
+    # --- data acquisition ---
+    FIRMS_MAP_KEY: ${FIRMS_MAP_KEY:-}
+    FIRMS_BASE_URL: ${FIRMS_BASE_URL:-https://firms.modaps.eosdis.nasa.gov}
+    FIRMS_TIMEOUT_SECONDS: ${FIRMS_TIMEOUT_SECONDS:-30}
+    FIRMS_MAX_RETRIES: ${FIRMS_MAX_RETRIES:-2}
+    # --- pipeline ---
+    DATA_MODE: ${DATA_MODE:-AUTO}            # AUTO | SEED | LIVE
+    SEED_START: ${SEED_START:-2000-11-02}
+    SEED_END: ${SEED_END:-2026-11-01}
+    SEED_SCALE: ${SEED_SCALE:-1.0}           # 0.05 for CI-sized archives
+    SEED_VERSION: ${SEED_VERSION:-2026.10.1}
+    BASELINE_START: ${BASELINE_START:-2012}
+    BASELINE_END: ${BASELINE_END:-2019}
+    ANOMALY_Z_THRESHOLD: ${ANOMALY_Z_THRESHOLD:-2.0}
+    SEAM_START: ${SEAM_START:-2012-06-01}
+    SEAM_END: ${SEAM_END:-2014-12-31}
+    # --- app ---
+    EMBEREBEYE_CORS_ORIGINS: ${EMBEREBEYE_CORS_ORIGINS:-*}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  depends_on:
+    db:
+      condition: service_healthy
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-embereye}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-embereye_dev_pw}
+      POSTGRES_DB: ${POSTGRES_DB:-embereye}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      # Published for the standalone host run (scripts/backfill_firms.py from
+      # a plain PowerShell): the host backfill writes to the SAME database
+      # the stack uses. Disable with POSTGRES_PORT="" if unwanted.
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-embereye} -d ${POSTGRES_DB:-embereye}"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    restart: unless-stopped
+
+  seeder:
+    <<: *backend-common
+    command: ["python", "-m", "app.seed_run"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    <<: *backend-common
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    volumes:
+      # FIRMS backfill script (scripts/backfill_firms.py), runnable inside the
+      # container: docker compose exec backend python scripts/backfill_firms.py --dry-run
+      - ./scripts:/srv/scripts:ro
+      - ./scripts:/app/scripts:ro
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE: /api
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:
