@@ -1,0 +1,33 @@
+# Normalize line endings in the repository; check out native on Windows.
+* text=auto
+
+# Source and configuration files should always be LF in the repository.
+*.py    text eol=lf
+*.ts    text eol=lf
+*.tsx   text eol=lf
+*.js    text eol=lf
+*.mjs   text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.sh    text eol=lf
+Makefile text eol=lf
+Dockerfile text eol=lf
+.env.example text eol=lf
+.gitignore text eol=lf
+
+# Windows-only helper scripts keep CRLF if ever added.
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary assets.
+*.woff2 binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.db    binary

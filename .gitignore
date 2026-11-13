@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# EmberEye .gitignore
+# ---------------------------------------------------------------------------
+
+# --- Operating system -------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Editors / IDEs ---------------------------------------------------------
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# --- Environment & secrets --------------------------------------------------
+.env
+.env.local
+.env.*.local
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# --- Node / frontend build --------------------------------------------------
+node_modules/
+dist/
+frontend/dist/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+
+# --- Databases & runtime data ----------------------------------------------
+# The FIRMS archive is a runtime artifact, not source. Rebuild it with
+# scripts/backfill_firms.py or the deterministic seeder (docs/DATA.md).
+*.db
+*.sqlite3
+*.db-wal
+*.db-shm
+data/
+backup/
+
+# --- Logs & temporary files -------------------------------------------------
+*.log
+*.tmp
+temp/
+tmp/
+
+# --- Test / browser automation artifacts ------------------------------------
+test-results/
+playwright-report/
+playwright/.cache/
