@@ -265,14 +265,18 @@ Dockerfiles, CI caches, and relative imports.
 ### Prerequisites
 Docker Desktop (recommended), or Python **3.11** + Node **20** for a local run.
 No API key is required: the stack starts on the labelled seed archive.
+The template defaults are for local/demo use; do not expose them unchanged on a public host.
 
 ### Quick start — Pull published GHCR images
 
 The release workflow publishes multi-architecture backend and frontend images
-to GHCR on stable version tags. This repository and its packages are private, so
-users need repository access and a classic GitHub PAT with `read:packages` to
-pull the images. Run the commands below from the root of a clone of this repo;
-`docker login` prompts for the PAT as the password.
+to GHCR on stable version tags. During preparation, the repository and packages
+may remain private; users then need repository access and a classic GitHub PAT
+with `read:packages`. For public submission, make the repository public and set
+**both GHCR packages to Public separately**: GHCR package visibility does not
+automatically become public when the linked repository does. Public container
+packages can then be pulled without login ([GitHub docs](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility)).
+Run the commands below from the root of a clone of this repo.
 
 ```bash
 git clone https://github.com/3lyly0/embereye-spaceapps.git
@@ -280,6 +284,8 @@ cd embereye-spaceapps
 cp .env.example .env
 # Optional: pin an exact release; omit to use the latest published tag.
 echo 'EMBEREYE_IMAGE_TAG=v1.0.9' >> .env
+# While the packages are private, log in with a classic PAT (read:packages).
+# Omit this command after both GHCR packages have been made Public.
 docker login ghcr.io -u 3lyly0
 docker compose pull
 docker compose up -d --no-build
@@ -293,6 +299,11 @@ With no `FIRMS_MAP_KEY`, the one-shot seeder creates the labelled deterministic
 synthetic demo archive. The UI marks it as synthetic; it is not NASA observations.
 To run the Nile Delta real-data snapshot instead, use the SQLite archive option
 below with the same prebuilt images.
+
+For a public Linux host with loopback-bound service ports and a Caddy HTTPS
+reverse proxy, see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The current
+application has no user authentication; review the public-demo security note in
+that guide before opening interactive write actions to untrusted visitors.
 
 ### Option A — Build the full stack from source
 
@@ -320,9 +331,10 @@ once, then exits. Data persists in the `pgdata` volume.
 curl -L -o embereye_dev.db "https://github.com/3lyly0/embereye-spaceapps/releases/download/v1.0.8-offline-data/embereye_dev.db"
 ```
 
-> Private-repository note: release assets require an authenticated GitHub
-> session. If `curl` returns 404, run `gh auth login` and use
+> While the repository is private, release assets require an authenticated
+> GitHub session. If `curl` returns 404, run `gh auth login` and use
 > `gh release download v1.0.8-offline-data -R 3lyly0/embereye-spaceapps` instead.
+> Once the repository is public, the direct `curl` command works anonymously.
 
 This snapshot contains real NASA FIRMS observations for the Nile Delta AOI and
 deterministic synthetic demo records for the other preset AOIs. The v1.0.8
