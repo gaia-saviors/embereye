@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { MethodsResponse } from "../api/types";
 import { useStore } from "../store";
+import { EMBEREYE_LOGO_DATA_URI } from "../assets/logoData";
 
 export default function MethodsModal() {
   const open = useStore((s) => s.methodsOpen);
@@ -29,14 +30,26 @@ export default function MethodsModal() {
         className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-basalt-300 bg-basalt-100 p-6 shadow-2xl text-alabaster"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-5 flex items-start justify-between border-b border-basalt-300 pb-3">
-          <div>
-            <h2 className="font-display text-lg font-bold text-alabaster tracking-wide">
-              Harmonization Methodology &amp; Provenance
-            </h2>
-            <p className="font-mono text-xs text-terra">
-              {meta?.methodology.harmonization_tier ?? "Standard Multi-Decadal Pipeline"}
-            </p>
+        <div className="mb-5 flex items-center justify-between border-b border-basalt-300 pb-3">
+          <div className="flex items-center gap-3.5">
+            <img
+              src={EMBEREYE_LOGO_DATA_URI}
+              alt="EmberEye Project Logo"
+              className="h-11 w-11 rounded-xl object-contain ring-1 ring-white/10 shadow"
+            />
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="font-display text-lg font-bold text-alabaster tracking-wide">
+                  EmberEye — Gaia Saviors
+                </h2>
+                <span className="rounded bg-terra/20 px-2 py-0.5 text-[10px] font-bold text-terra">
+                  NASA Space Apps 2026
+                </span>
+              </div>
+              <p className="font-mono text-xs text-muted">
+                {meta?.methodology.harmonization_tier ?? "Harmonization Methodology & Provenance"}
+              </p>
+            </div>
           </div>
           <button
             onClick={() => setOpen(false)}

@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/embereye-logo.svg" width="120" alt="EmberEye logo" />
+<img src="assets/embereye-logo.png" width="130" alt="EmberEye Logo" />
 
 # EmberEye
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { api } from "../api/client";
 import { useStore, type ViewName } from "../store";
+import { EMBEREYE_LOGO_DATA_URI } from "../assets/logoData";
 
 const VIEWS: { id: ViewName; label: string }[] = [
   { id: "calendar", label: "Calendar Matrix" },
@@ -54,39 +55,20 @@ export default function TopBar() {
   return (
     <header className="z-40 flex h-14 shrink-0 items-center gap-5 border-b border-basalt-300 bg-basalt-100 px-4">
       {/* Left: Logo + wordmark */}
-      <div className="flex items-center gap-2.5 shrink-0">
-        {/* Orbital diamond SVG emblem */}
-        <svg width="34" height="34" viewBox="0 0 34 34" fill="none" aria-label="EmberEye emblem">
-          {/* Outer reticle ring */}
-          <circle cx="17" cy="17" r="15.5" stroke="#E5A93C" strokeWidth="1" strokeOpacity="0.5" />
-          {/* Inner reticle ring */}
-          <circle cx="17" cy="17" r="10" stroke="#E04F33" strokeWidth="1" strokeOpacity="0.7" />
-          {/* Crosshair lines */}
-          <line x1="17" y1="2" x2="17" y2="8" stroke="#E5A93C" strokeWidth="1.5" strokeLinecap="round" />
-          <line x1="17" y1="26" x2="17" y2="32" stroke="#E5A93C" strokeWidth="1.5" strokeLinecap="round" />
-          <line x1="2" y1="17" x2="8" y2="17" stroke="#E5A93C" strokeWidth="1.5" strokeLinecap="round" />
-          <line x1="26" y1="17" x2="32" y2="17" stroke="#E5A93C" strokeWidth="1.5" strokeLinecap="round" />
-          {/* Diamond core */}
-          <path
-            d="M17 10 L22 17 L17 24 L12 17 Z"
-            fill="#E04F33"
-            fillOpacity="0.9"
-          />
-          {/* Inner diamond highlight */}
-          <path
-            d="M17 13 L19.5 17 L17 21 L14.5 17 Z"
-            fill="#F08C2E"
-            fillOpacity="0.7"
-          />
-          {/* Center dot */}
-          <circle cx="17" cy="17" r="2" fill="#FFF3B0" />
-        </svg>
+      <div className="flex items-center gap-3 shrink-0">
+        <img
+          src={EMBEREYE_LOGO_DATA_URI}
+          alt="EmberEye Project Logo"
+          className="h-9 w-9 rounded-xl object-contain ring-1 ring-white/10 shadow-lg"
+        />
         <div className="leading-tight">
-          <div className="font-display text-sm font-bold tracking-[0.15em] text-alabaster">
-            EMBEREYE
+          <div className="flex items-center gap-2">
+            <span className="font-display text-sm font-bold tracking-[0.15em] text-alabaster">
+              EMBEREYE
+            </span>
           </div>
           <div className="font-mono text-[9px] tracking-widest text-muted uppercase">
-            FIRMS Harmonization Engine
+            NASA Space Apps 2026 · FIRMS Engine
           </div>
         </div>
       </div>

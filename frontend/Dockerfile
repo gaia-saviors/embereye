@@ -6,7 +6,11 @@ ARG VITE_API_BASE=/api
 ENV VITE_API_BASE=$VITE_API_BASE
 
 COPY package.json package-lock.json* ./
-RUN npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000 && \
+    npm config set fetch-retries 5 && \
+    (npm ci --no-audit --no-fund 2>/dev/null || npm install --no-audit --no-fund)
 
 COPY . .
 RUN npm run build
