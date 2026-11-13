@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from datetime import date
@@ -143,17 +144,35 @@ def _seed_synthetic(db: Session, aoi_list: list[Aoi], scale: float) -> dict:
 
 
 def _profile_from_aoi(aoi: Aoi):
-    """Fallback profile for user-created AOIs during a full reseed: a sparse
-    background regime derived from the stored geometry. Only reachable via
-    FORCE_SEED rebuilds; user AOIs normally keep their ingested rows."""
-    from .profiles import RegionProfile
+    """Fallback profile for user-created AOIs: a sparse background regime
+    derived from the stored geometry. Used by full reseeds and by the
+    background job when a drawn AOI falls outside the ingested archive."""
+    from .profiles import Cluster, RegionProfile
 
     ring = json.loads(aoi.geojson)["coordinates"][0]
     w, s, e, n = ring_bbox(ring)
+    mid_lat = (s + n) / 2.0
+    width_km = max(1.0, (e - w) * 111.0 * math.cos(math.radians(mid_lat)))
+    height_km = max(1.0, (n - s) * 111.0)
+    spread_km = min(50.0, max(2.0, min(width_km, height_km) / 6.0))
+    # A background regime still needs ignition clusters: the generator samples
+    # event locations from them (an empty tuple made numpy's choice() raise for
+    # every AOI drawn outside the archive).
+    clusters = tuple(
+        Cluster(
+            name=f"background-{i + 1}",
+            lat=s + (n - s) * fy,
+            lon=w + (e - w) * fx,
+            weight=0.25,
+            spread_km=spread_km,
+            landcover="cropland",
+        )
+        for i, (fy, fx) in enumerate(((0.3, 0.3), (0.3, 0.7), (0.7, 0.3), (0.7, 0.7)))
+    )
     return RegionProfile(
         aoi_id=aoi.id, name=aoi.name, description="user AOI (background regime)",
         bbox=(w, s, e, n),
-        clusters=(),
+        clusters=clusters,
         base_daily_events=0.0,
         seasonality=((210, 60, 1.0),),
         year_factors={},

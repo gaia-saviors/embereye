@@ -146,6 +146,10 @@ def generate_aoi_records(
     """Generate the canonical record stream for one AOI. Fully deterministic."""
     rng = rng_for(seed_version, aoi_id)
     west, south, east, north = profile.bbox
+    if not profile.clusters:
+        # No ignition clusters means no fire events can be placed; return the
+        # (empty) stream instead of letting numpy choke on choice(a=0).
+        return []
     weights = np.array([c.weight for c in profile.clusters], dtype=np.float64)
     weights /= weights.sum()
     records: list[CanonicalRecord] = []

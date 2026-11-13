@@ -173,6 +173,38 @@ def test_create_aoi_runs_aggregation_job(monkeypatch):
     assert client.delete(f"/api/aois/{aoi_id}").status_code == 204
 
 
+def test_dynamic_aoi_profile_has_ignition_clusters():
+    """Regression: an AOI drawn outside the archive synthesized a profile with
+    no clusters, so the generator died with
+    ``ValueError: a must be a positive integer unless no samples are taken``.
+    """
+    import json
+    from dataclasses import replace
+
+    from app.seed.pipeline import _profile_from_aoi
+    from app.seed.synth import generate_aoi_records
+
+    ring = [[100.0, 50.0], [100.5, 50.0], [100.5, 50.5], [100.0, 50.5], [100.0, 50.0]]
+    aoi = Aoi(
+        id="dynamic-profile-test", name="Dynamic", description="",
+        geojson=json.dumps({"type": "Polygon", "coordinates": [ring]}),
+        west=100.0, south=50.0, east=100.5, north=50.5, is_preset=False,
+    )
+    profile = _profile_from_aoi(aoi)
+    assert profile.clusters, "dynamic AOIs need at least one ignition cluster"
+
+    active = replace(profile, base_daily_events=1.8)
+    records = generate_aoi_records(
+        active, aoi.id, date(2020, 1, 1), date(2020, 3, 31), 1.0, "test-seed"
+    )
+    assert records, "an active background regime must produce detections"
+
+    empty = replace(profile, clusters=(), base_daily_events=1.8)
+    assert generate_aoi_records(
+        empty, aoi.id, date(2020, 1, 1), date(2020, 3, 31), 1.0, "test-seed"
+    ) == []
+
+
 def test_health_aoi_count_matches_aoi_table():
     """Regression: /api/health counted SystemState rows (12) instead of AOIs."""
     db = SessionLocal()
