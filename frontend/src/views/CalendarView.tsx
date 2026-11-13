@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api/client";
-import type { CalendarCell, TransferredWeek } from "../api/types";
+import type { CalendarCell, CalendarResponse, TransferredWeek } from "../api/types";
 import { useStore, PROVENANCE_LABEL, PROVENANCE_COLOR } from "../store";
-import { rampColor, ColorPalette, SENSOR_COLOR, ANOMALY_HIGH, ANOMALY_LOW } from "../lib/colors";
+import { calendarCacheKey, getCachedCalendar, setCachedCalendar } from "../lib/calendarCache";
+import { rampColor, SENSOR_COLOR, ANOMALY_HIGH, ANOMALY_LOW } from "../lib/colors";
 import { fmtInt, fmtMw, fmtNum, MONTHS, MONTH_DOY_START, prettyDate } from "../lib/format";
 
 const GUTTER = 48;
@@ -21,7 +22,15 @@ export default function CalendarView() {
   const setCursorDate = useStore((s) => s.setCursorDate);
   const setView = useStore((s) => s.setView);
   const meta = useStore((s) => s.meta);
-  const anomalyOverlay = useStore((s) => s.filters.anomalyOverlay);
+  const filters = useStore((s) => s.filters);
+  const anomalyOverlay = filters.anomalyOverlay;
+
+  const yearFilter = useStore((s) => s.calendarYearFilter);
+  const setYearFilter = useStore((s) => s.setCalendarYearFilter);
+  const matrixView = useStore((s) => s.calendarMatrixView);
+  const setMatrixView = useStore((s) => s.setCalendarMatrixView);
+  const colorRamp = useStore((s) => s.calendarColorRamp);
+  const setColorRamp = useStore((s) => s.setCalendarColorRamp);
 
   const [hover, setHover] = useState<
     | { kind: "day"; cell: CalendarCell; x: number; y: number }
@@ -33,13 +42,41 @@ export default function CalendarView() {
   const [p99Week, setP99Week] = useState(200);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [yearFilter, setYearFilter] = useState<"all" | "last10" | "viirs">("all");
-  const [matrixView, setMatrixView] = useState<"daily" | "monthly">("daily");
-  const [colorRamp, setColorRamp] = useState<ColorPalette>("magma");
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(1100);
 
   const activeAoi = aois.find((a) => a.id === aoiId);
+
+  const startYear = yearFilter === "last10" ? 2016 : yearFilter === "viirs" ? 2012 : undefined;
+  const { sensor, confidence, daynight, minFrp, hideStaticSources } = filters;
+  const cacheKey = aoiId
+    ? calendarCacheKey(aoiId, yearFilter, {
+        sensor, confidence, daynight, minFrp, hideStaticSources,
+      })
+    : "";
+
+  // Human-readable summary of what the matrix is currently counting. With no
+  // ribbon filter it is the stored harmonized estimate (comparable daytime,
+  // non-static subset); any active filter switches the backend to a raw
+  // hotspot slice with exactly the map's predicate.
+  const filtersActive =
+    sensor !== "all" ||
+    confidence !== "all" ||
+    daynight !== "all" ||
+    minFrp != null ||
+    hideStaticSources;
+  const filterSummary = filtersActive
+    ? [
+        "raw detections",
+        sensor === "all" ? "all sensors" : sensor,
+        daynight === "all" ? "day + night" : daynight === "D" ? "day only" : "night only",
+        confidence === "all" ? "all confidence" : `${confidence.toLowerCase()} confidence`,
+        minFrp != null ? `FRP ≥ ${minFrp} MW` : null,
+        hideStaticSources ? "static flares excluded" : "static flares included",
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "harmonized estimate (comparable daytime, non-static) · no ribbon filter applied";
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -52,28 +89,50 @@ export default function CalendarView() {
   }, []);
 
   useEffect(() => {
-    if (!aoiId) return;
+    if (!aoiId || !cacheKey) return;
+
+    const adopt = (c: CalendarResponse) => {
+      setCalendar(c);
+      const nativeCells = (c.cells ?? []).filter((x) => x.provenance === "VIIRS_NATIVE");
+      const ns = nativeCells.map((x) => x.n_harmonized ?? 0).sort((a, b) => a - b);
+      setP99Day(ns.length ? Math.max(1, ns[Math.floor(ns.length * 0.99)]) : 50);
+      const ws = (c.transferred_weeks ?? []).map((w) => w.n_harmonized ?? 0).sort((a, b) => a - b);
+      setP99Week(ws.length ? Math.max(1, ws[Math.floor(ws.length * 0.99)]) : 200);
+    };
+
+    // Tab switches remount this view; a cache hit repaints instantly instead
+    // of re-requesting the same payload (and flashing the full-screen loader).
+    const cached = getCachedCalendar(cacheKey);
+    if (cached) {
+      setError(null);
+      setLoading(false);
+      adopt(cached);
+      return;
+    }
+
     let alive = true;
     setLoading(true);
     setError(null);
-    const startYear = yearFilter === "last10" ? 2016 : yearFilter === "viirs" ? 2012 : undefined;
     api
-      .calendar(aoiId, undefined, undefined, startYear)
+      .calendar(aoiId, {
+        startYear,
+        sensor,
+        confidence,
+        daynight,
+        minFrp,
+        hideStatic: hideStaticSources,
+      })
       .then((c) => {
         if (!alive) return;
-        setCalendar(c);
-        const nativeCells = (c.cells ?? []).filter((x) => x.provenance === "VIIRS_NATIVE");
-        const ns = nativeCells.map((x) => x.n_harmonized ?? 0).sort((a, b) => a - b);
-        setP99Day(ns.length ? Math.max(1, ns[Math.floor(ns.length * 0.99)]) : 50);
-        const ws = (c.transferred_weeks ?? []).map((w) => w.n_harmonized ?? 0).sort((a, b) => a - b);
-        setP99Week(ws.length ? Math.max(1, ws[Math.floor(ws.length * 0.99)]) : 200);
+        setCachedCalendar(cacheKey, c);
+        adopt(c);
       })
       .catch((e) => alive && setError((e as Error).message))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
-  }, [aoiId, setCalendar, yearFilter]);
+  }, [aoiId, cacheKey, startYear, sensor, confidence, daynight, minFrp, hideStaticSources, setCalendar]);
 
   const years = calendar?.summary.years ?? [];
   const viirsStart = calendar?.viirs_start_date ?? null;
@@ -406,6 +465,12 @@ export default function CalendarView() {
               <span className="font-mono text-xs text-terra font-semibold">
                 {matrixView === "daily" ? "Daily (2012+) & Weekly (2000–2011)" : "Monthly Aggregations (2000–2026)"}
               </span>
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="rounded bg-basalt-200 px-1.5 py-0.5 font-mono font-bold uppercase tracking-widest text-muted">
+                Ribbon filters
+              </span>
+              <span className="text-pewter">{filterSummary}</span>
             </div>
           </div>
 

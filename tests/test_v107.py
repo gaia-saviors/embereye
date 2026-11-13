@@ -18,7 +18,7 @@ from starlette.testclient import TestClient
 
 from app.db import SessionLocal, create_all
 from app.main import app
-from app.models import Aoi, HarmonizedDaily, Hotspot, IngestRun
+from app.models import Aoi, Hotspot, IngestRun
 from app.seed.profiles import PRESET_PROFILES
 from app.seed.pipeline import seed_unseeded_presets, ensure_preset_aois
 
@@ -215,6 +215,122 @@ def test_health_aoi_count_matches_aoi_table():
     resp = client.get("/api/health")
     assert resp.status_code == 200
     assert resp.json()["counts"]["aois"] == expected
+
+
+def _ensure_seeded(aoi_id: str = "nile-delta-egypt") -> None:
+    """Make the calendar-filter tests self-contained.
+
+    The module normally starts with ``test_seed_unseeded_presets_*``, but a
+    targeted run (``pytest -k calendar_filter``) must not depend on test order,
+    so seed on demand. ``seed_unseeded_presets`` is idempotent and preserves
+    any AOI that already has rows.
+    """
+    db = SessionLocal()
+    try:
+        ensure_preset_aois(db)
+        if db.query(Hotspot).filter(Hotspot.aoi_id == aoi_id).count() == 0:
+            report = seed_unseeded_presets(db)
+            assert report["status"] == "OK"
+    finally:
+        db.close()
+
+
+def _calendar(**params):
+    query = {"aoi": "nile-delta-egypt", "compact": "true"}
+    query.update(params)
+    resp = client.get("/api/calendar", params=query)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _total(payload) -> float:
+    return sum(c["n_harmonized"] for c in payload["cells"])
+
+
+def test_calendar_filters_default_to_unfiltered_series():
+    """Explicit default ribbon filters must reproduce the unfiltered payload.
+
+    The calendar is fetched with the active ribbon filters on every request;
+    an "all/all/all/no FRP/no static exclusion" request has to be byte-for-byte
+    the same series as the legacy call, otherwise merely rendering the ribbon
+    would perturb the headline numbers.
+    """
+    _ensure_seeded()
+    base = _calendar(start_year=2020, end_year=2020)
+    explicit = _calendar(
+        start_year=2020,
+        end_year=2020,
+        sensor="all",
+        confidence="all",
+        daynight="all",
+        hide_static="false",
+    )
+    assert base == explicit
+
+
+def test_calendar_filter_sensor_family_is_exclusive():
+    """MODIS and VIIRS selections must not leak the other instrument."""
+    _ensure_seeded()
+    modis = _calendar(start_year=2020, end_year=2020, sensor="MODIS")
+    viirs = _calendar(start_year=2020, end_year=2020, sensor="VIIRS")
+
+    assert _total(modis) > 0 and _total(viirs) > 0
+    assert all(c["n_viirs"] == 0 for c in modis["cells"])
+    assert all(c["n_modis"] == 0 for c in viirs["cells"])
+    # Each slice stays internally consistent: the filtered total is exactly
+    # the selected family's count for that day.
+    assert all(c["n_modis"] == c["n_harmonized"] for c in modis["cells"])
+    assert all(c["n_viirs"] == c["n_harmonized"] for c in viirs["cells"])
+
+
+def test_calendar_filter_daynight_recomputes_night_only():
+    """Night view is built from night detections, so n_night == n_harmonized."""
+    _ensure_seeded()
+    night = _calendar(start_year=2020, end_year=2020, daynight="N")
+    assert _total(night) > 0
+    assert all(c["n_night"] == c["n_harmonized"] for c in night["cells"])
+    raw = _calendar(start_year=2020, end_year=2020, min_frp=0)
+    assert _total(night) < _total(raw)
+
+
+def test_calendar_filter_static_and_confidence_and_frp_reduce_totals():
+    """Static exclusion / confidence / min-FRP shrink the series but keep the grid."""
+    _ensure_seeded()
+    raw = _calendar(start_year=2020, end_year=2020, min_frp=0)
+    static_off = _calendar(start_year=2020, end_year=2020, min_frp=0, hide_static="true")
+    high = _calendar(start_year=2020, end_year=2020, min_frp=0, confidence="HIGH")
+    frp = _calendar(start_year=2020, end_year=2020, min_frp=50)
+
+    assert len(static_off["cells"]) == len(raw["cells"]), "filters must keep the day grid"
+    assert all(c["n_static"] == 0 for c in static_off["cells"])
+    assert _total(static_off) < _total(raw)
+    assert _total(high) < _total(raw)
+    assert _total(frp) < _total(raw)
+
+
+def test_calendar_filter_combined_matches_map_semantics():
+    """The ribbon sends filters together; the combined slice stays coherent."""
+    _ensure_seeded()
+    combo = _calendar(
+        start_year=2020,
+        end_year=2020,
+        sensor="VIIRS",
+        daynight="N",
+        confidence="HIGH",
+        hide_static="true",
+    )
+    assert all(c["n_modis"] == 0 for c in combo["cells"])
+    assert all(c["n_static"] == 0 for c in combo["cells"])
+    assert all(c["n_night"] == c["n_harmonized"] for c in combo["cells"])
+
+
+def test_calendar_filter_applies_before_viirs_seam():
+    """Pre-seam years (MODIS terrain) also respond to the ribbon filters."""
+    _ensure_seeded()
+    base = _calendar(start_year=2011, end_year=2011, min_frp=0)
+    filtered = _calendar(start_year=2011, end_year=2011, min_frp=0, hide_static="true")
+    assert _total(base) > 0
+    assert _total(filtered) < _total(base)
 
 
 def test_geojson_streaming_export_fast_and_valid():

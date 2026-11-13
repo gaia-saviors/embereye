@@ -8,6 +8,7 @@ import type {
   SnapshotRedirect,
 } from "../api/types";
 import { useStore } from "../store";
+import { clearCalendarCache } from "../lib/calendarCache";
 import { SENSOR_COLOR, UI } from "../lib/colors";
 import { addDays, daysBetween, prettyDate } from "../lib/format";
 import {
@@ -538,6 +539,8 @@ export default function MapView() {
       if (useStore.getState().aoiId !== id) return;
       try {
         await api.calendar(id);
+        // A freshly built AOI must not serve a stale calendar slice.
+        clearCalendarCache();
         useStore.getState().setMapToast(`AOI ${id} ready — harmonized series built.`);
         return;
       } catch {

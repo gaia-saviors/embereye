@@ -7,8 +7,11 @@ import type {
   MetaResponse,
   Provenance,
 } from "./api/types";
+import type { ColorPalette } from "./lib/colors";
 
 export type ViewName = "calendar" | "map" | "analytics";
+export type CalendarYearFilter = "all" | "last10" | "viirs";
+export type CalendarMatrixView = "daily" | "monthly";
 
 export interface Filters {
   sensor: "all" | "MODIS" | "VIIRS";
@@ -57,6 +60,16 @@ interface EmberState {
 
   calendar: CalendarResponse | null;
   setCalendar: (c: CalendarResponse | null) => void;
+
+  // Calendar view preferences live in the store (not component state) so the
+  // year window / matrix mode / palette survive a tab switch, exactly like
+  // the map's viewport and basemap.
+  calendarYearFilter: CalendarYearFilter;
+  setCalendarYearFilter: (f: CalendarYearFilter) => void;
+  calendarMatrixView: CalendarMatrixView;
+  setCalendarMatrixView: (v: CalendarMatrixView) => void;
+  calendarColorRamp: ColorPalette;
+  setCalendarColorRamp: (p: ColorPalette) => void;
 
   selectedCellDate: string | null;
   setSelectedCellDate: (d: string | null) => void;
@@ -127,13 +140,24 @@ export const useStore = create<EmberState>((set) => ({
     confidence: "all",
     daynight: "all",
     minFrp: null,
-    hideStaticSources: true,
+    // Off by default: static flares are real detections, so they are shown
+    // until the user explicitly filters them. This keeps the map and the
+    // calendar consistent with Analytics' "layers are never hidden silently"
+    // rule (it previously hid ~40% of the Nile archive with no visible cue).
+    hideStaticSources: false,
     anomalyOverlay: true,
   },
   setFilters: (f) => set((s) => ({ filters: { ...s.filters, ...f } })),
 
   calendar: null,
   setCalendar: (c) => set({ calendar: c }),
+
+  calendarYearFilter: "all",
+  setCalendarYearFilter: (f) => set({ calendarYearFilter: f }),
+  calendarMatrixView: "daily",
+  setCalendarMatrixView: (v) => set({ calendarMatrixView: v }),
+  calendarColorRamp: "magma",
+  setCalendarColorRamp: (p) => set({ calendarColorRamp: p }),
 
   selectedCellDate: null,
   setSelectedCellDate: (d) => set({ selectedCellDate: d }),

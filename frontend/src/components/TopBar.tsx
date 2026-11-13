@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api } from "../api/client";
 import { useStore, type ViewName } from "../store";
 import { EMBEREYE_LOGO_DATA_URI } from "../assets/logoData";
+import { clearCalendarCache } from "../lib/calendarCache";
 
 const VIEWS: { id: ViewName; label: string }[] = [
   { id: "calendar", label: "Calendar Matrix" },
@@ -44,6 +45,8 @@ export default function TopBar() {
     setLiveBusy(true);
     try {
       const res = await api.liveFetch(aoiId, 2);
+      // New rows invalidate every cached calendar slice for this session.
+      clearCalendarCache();
       setMapToast(`LIVE FETCH ${res.status}: ${res.inserted} rows. ${res.message}`);
     } catch (e) {
       setMapToast(`LIVE FETCH failed: ${(e as Error).message}`);

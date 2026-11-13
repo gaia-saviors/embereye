@@ -1,10 +1,11 @@
 """Burning-activity calendar endpoint: the challenge's core artifact."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
@@ -30,6 +31,151 @@ NATIVE_PROVENANCE = {"VIIRS_NATIVE", "VIIRS_FORWARD", "OVERLAP_FUSED"}
 # wraps through the 53-week ring, matching the daily +/-15-day kernel).
 WEEK_RING = 2
 ISO_WEEKS_MAX = 53
+
+
+@dataclass(slots=True)
+class _FilteredDay:
+    """HarmonizedDaily-shaped row built from raw detections for a filtered view.
+
+    The unfiltered calendar draws the stored HARMONIZED series (comparable
+    daytime subset, single reference scale). That series has no per-sensor or
+    per-confidence breakdown, so a filtered matrix is recomputed from the
+    hotspot rows with the SAME predicate the map uses. Counts/FRP in the
+    filtered response are therefore raw detections that pass the ribbon
+    filters, and the model-only columns (intervals, anomaly flags) are left
+    empty because they are defined for the harmonized product, not a slice.
+    """
+
+    local_date: date
+    n_modis: int
+    n_viirs: int
+    n_harmonized: float
+    n_harmonized_lo: float | None
+    n_harmonized_hi: float | None
+    n_comparable_modis: int
+    n_comparable_viirs: int
+    n_static: int
+    n_night: int
+    static_share: float | None
+    frp_modis_mw: float
+    frp_viirs_mw: float
+    frp_harmonized_mw: float
+    z_n: float | None
+    z_frp: float | None
+    pct_n: float | None
+    flag_high: bool
+    flag_low: bool
+    seam_weight: float
+    provenance: str
+
+
+def _count_if(cond):
+    return func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
+
+
+def _sum_if(cond, value):
+    return func.coalesce(func.sum(case((cond, value), else_=0.0)), 0.0)
+
+
+def _filtered_days(
+    db: Session,
+    aoi: str,
+    start: date | None,
+    end: date | None,
+    base_by_date: dict[date, HarmonizedDaily],
+    *,
+    sensor: str,
+    satellite: str | None,
+    confidence: str,
+    daynight: str,
+    min_frp: float | None,
+    hide_static: bool,
+) -> list[_FilteredDay]:
+    """Recompute the daily series from hotspots under the active filters.
+
+    Filter semantics mirror the map (``hotspots._apply_common``): sensor
+    family, exact confidence class, day/night flag, minimum FRP and static
+    source exclusion. NULL ``static_source`` rows count as non-static, exactly
+    like the map's FLAG_STATIC bit.
+    """
+    conds = []
+    if sensor != "all":
+        conds.append(Hotspot.sensor_family == sensor)
+    if satellite:
+        conds.append(Hotspot.satellite == satellite)
+    if confidence != "all":
+        conds.append(Hotspot.confidence_class == confidence)
+    if daynight != "all":
+        conds.append(Hotspot.daynight == daynight)
+    if min_frp is not None:
+        conds.append(Hotspot.frp_mw >= min_frp)
+    if hide_static:
+        conds.append(Hotspot.static_source.is_not(True))
+    kept = and_(*conds)
+
+    modis = Hotspot.sensor_family == "MODIS"
+    viirs = Hotspot.sensor_family == "VIIRS"
+    night = Hotspot.daynight == "N"
+    static = Hotspot.static_source.is_(True)
+
+    stmt = (
+        select(
+            Hotspot.local_date.label("d"),
+            _count_if(modis).label("n_modis"),
+            _count_if(viirs).label("n_viirs"),
+            _count_if(night).label("n_night"),
+            _count_if(static).label("n_static"),
+            func.coalesce(func.sum(Hotspot.frp_mw), 0.0).label("frp"),
+            _sum_if(modis, Hotspot.frp_mw).label("frp_modis"),
+            _sum_if(viirs, Hotspot.frp_mw).label("frp_viirs"),
+        )
+        .where(Hotspot.aoi_id == aoi)
+        .where(kept)
+    )
+    if start is not None:
+        stmt = stmt.where(Hotspot.local_date >= start)
+    if end is not None:
+        stmt = stmt.where(Hotspot.local_date <= end)
+    stmt = stmt.group_by(Hotspot.local_date).order_by(Hotspot.local_date)
+
+    agg_by_date = {r["d"]: r for r in db.execute(stmt).mappings()}
+
+    # Keep the full harmonized coverage (same day count / year axis as the
+    # unfiltered calendar); days with no surviving detections become zeros.
+    out: list[_FilteredDay] = []
+    for d in sorted(base_by_date):
+        base = base_by_date[d]
+        r = agg_by_date.get(d)
+        n_modis = int(r["n_modis"]) if r else 0
+        n_viirs = int(r["n_viirs"]) if r else 0
+        total = n_modis + n_viirs
+        n_static = int(r["n_static"]) if r else 0
+        out.append(
+            _FilteredDay(
+                local_date=d,
+                n_modis=n_modis,
+                n_viirs=n_viirs,
+                n_harmonized=float(total),
+                n_harmonized_lo=None,
+                n_harmonized_hi=None,
+                n_comparable_modis=0,
+                n_comparable_viirs=0,
+                n_static=n_static,
+                n_night=int(r["n_night"]) if r else 0,
+                static_share=(float(n_static) / total) if total else None,
+                frp_modis_mw=float(r["frp_modis"]) if r else 0.0,
+                frp_viirs_mw=float(r["frp_viirs"]) if r else 0.0,
+                frp_harmonized_mw=float(r["frp"]) if r else 0.0,
+                z_n=None,
+                z_frp=None,
+                pct_n=None,
+                flag_high=False,
+                flag_low=False,
+                seam_weight=base.seam_weight,
+                provenance=base.provenance,
+            )
+        )
+    return out
 
 
 def _weekly_loyo(weeks: list[WeeklyCell]) -> None:
@@ -195,6 +341,15 @@ def calendar(
     start_year: int | None = Query(default=None, description="Filter start year (inclusive)"),
     end_year: int | None = Query(default=None, description="Filter end year (inclusive)"),
     compact: bool = Query(default=False, description="Exclude verbose diagnostic fields"),
+    # Ribbon filters - identical semantics to /hotspots so the matrix responds
+    # to the same controls as the map (sensor, day/night, confidence, FRP,
+    # static-source exclusion).
+    sensor: str = Query("all", pattern="^(all|MODIS|VIIRS)$"),
+    satellite: str | None = None,
+    confidence: str = Query("all", pattern="^(all|LOW|NOMINAL|HIGH)$"),
+    daynight: str = Query("all", pattern="^(all|D|N)$"),
+    min_frp: float | None = Query(None, ge=0),
+    hide_static: bool = Query(False, description="Drop static-source (gas flare) detections"),
     db: Session = Depends(get_db),
 ) -> CalendarResponse:
     cfg = get_settings()
@@ -210,6 +365,26 @@ def calendar(
     rows = db.execute(stmt).scalars().all()
     if not rows:
         raise HTTPException(404, "no calendar data for AOI; run the aggregation pipeline")
+    base_rows = rows
+
+    filters_active = (
+        sensor != "all"
+        or bool(satellite)
+        or confidence != "all"
+        or daynight != "all"
+        or min_frp is not None
+        or hide_static
+    )
+    if filters_active:
+        lo = date(start_year, 1, 1) if isinstance(start_year, int) else start
+        hi = date(end_year, 12, 31) if isinstance(end_year, int) else end
+        rows = _filtered_days(
+            db, aoi, lo, hi, {r.local_date: r for r in base_rows},
+            sensor=sensor, satellite=satellite, confidence=confidence,
+            daynight=daynight, min_frp=min_frp, hide_static=hide_static,
+        )
+        if not rows:
+            raise HTTPException(404, "no calendar data for AOI matching the active filters")
 
     cells = [
         CalendarCell(
@@ -256,7 +431,7 @@ def calendar(
         for w in weeks_all if w.provenance in TRANSFERRED_PROVENANCE
     ]
     viirs_start = min(
-        (c.date for c in cells if c.provenance in NATIVE_PROVENANCE),
+        (r.local_date for r in base_rows if r.provenance in NATIVE_PROVENANCE),
         default=None,
     )
     native_cells = [c for c in cells if c.provenance in NATIVE_PROVENANCE]

@@ -140,15 +140,36 @@ export const api = {
     min_frp?: number;
   }) => request<GridResponse>(`/hotspots/grid${qs(params)}`),
 
-  calendar: (aoi: string, start?: string, end?: string, startYear?: number, endYear?: number, compact?: boolean) =>
+  calendar: (
+    aoi: string,
+    opts: {
+      start?: string;
+      end?: string;
+      startYear?: number;
+      endYear?: number;
+      compact?: boolean;
+      sensor?: string;
+      satellite?: string;
+      confidence?: string;
+      daynight?: string;
+      minFrp?: number | null;
+      hideStatic?: boolean;
+    } = {},
+  ) =>
     request<CalendarResponse>(
       `/calendar${qs({
         aoi,
-        start,
-        end,
-        start_year: startYear,
-        end_year: endYear,
-        compact: compact ? true : undefined,
+        start: opts.start,
+        end: opts.end,
+        start_year: opts.startYear,
+        end_year: opts.endYear,
+        compact: opts.compact ? true : undefined,
+        sensor: opts.sensor,
+        satellite: opts.satellite,
+        confidence: opts.confidence,
+        daynight: opts.daynight,
+        min_frp: opts.minFrp ?? undefined,
+        hide_static: opts.hideStatic ? true : undefined,
       })}`
     ),
 
