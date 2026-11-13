@@ -12,11 +12,11 @@ import json
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
-from ..geometry import polygon_centroid, ring_bbox
+from ..geometry import ring_bbox
 from ..models import (
     AggregationJob,
     Aoi,
@@ -25,6 +25,7 @@ from ..models import (
     FireEpisode,
     HarmonizedDaily,
     Hotspot,
+    IngestRun,
     SeasonMetrics,
     utcnow,
 )
@@ -240,6 +241,8 @@ def delete_aoi(aoi_id: str, db: Session = Depends(get_db)) -> None:
     db.execute(delete(CalibrationModel).where(CalibrationModel.aoi_id == aoi_id))
     db.execute(delete(FireEpisode).where(FireEpisode.aoi_id == aoi_id))
     db.execute(delete(SeasonMetrics).where(SeasonMetrics.aoi_id == aoi_id))
+    # Ingest history outlives the AOI: keep the audit trail, drop the foreign key.
+    db.execute(update(IngestRun).where(IngestRun.aoi_id == aoi_id).values(aoi_id=None))
     db.execute(delete(Hotspot).where(Hotspot.aoi_id == aoi_id))
     db.execute(delete(AggregationJob).where(AggregationJob.aoi_id == aoi_id))
     db.delete(a)

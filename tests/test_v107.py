@@ -134,6 +134,57 @@ def test_intra_viirs_methodology_documented():
     assert "f_day" in combined_steps
 
 
+def test_create_aoi_runs_aggregation_job(monkeypatch):
+    """Regression: POST /api/aois used to fail its background job with
+    ``NameError: name 'func' is not defined`` (missing SQLAlchemy import).
+
+    The job is exercised end-to-end through the API with the heavy steps
+    stubbed out, so the SQL coverage query itself is the thing under test.
+    """
+    import app.harmonize.pipeline as pipeline_mod
+    import app.seed.synth as synth_mod
+    from app.models import AggregationJob
+
+    monkeypatch.setattr(synth_mod, "generate_aoi_records", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline_mod, "run_pipeline_for_aoi", lambda *a, **k: {"status": "OK"})
+
+    resp = client.post(
+        "/api/aois",
+        json={
+            "name": "Regression Box",
+            "description": "tiny AOI used by the API regression test",
+            "geojson": {
+                "type": "Polygon",
+                "coordinates": [[[24.0, 44.0], [24.4, 44.0], [24.4, 44.4], [24.0, 44.4], [24.0, 44.0]]],
+            },
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    aoi_id = resp.json()["id"]
+
+    db = SessionLocal()
+    try:
+        job = db.query(AggregationJob).filter(AggregationJob.aoi_id == aoi_id).one()
+        assert job.status == "DONE", job.message
+        assert "NameError" not in (job.message or "")
+    finally:
+        db.close()
+
+    assert client.delete(f"/api/aois/{aoi_id}").status_code == 204
+
+
+def test_health_aoi_count_matches_aoi_table():
+    """Regression: /api/health counted SystemState rows (12) instead of AOIs."""
+    db = SessionLocal()
+    try:
+        expected = db.query(Aoi).count()
+    finally:
+        db.close()
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    assert resp.json()["counts"]["aois"] == expected
+
+
 def test_geojson_streaming_export_fast_and_valid():
     """Fix 2: Hotspot GeoJSON streaming export completes quickly and produces valid JSON."""
     import json

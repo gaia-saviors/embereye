@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, timezone
+from datetime import date
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -11,8 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..db import get_db
 from ..harmonize.pipeline import CITATIONS
-from ..ingest.firms_client import check_key
-from ..models import FireEpisode, HarmonizedDaily, Hotspot, IngestRun, SystemState
+from ..models import Aoi, FireEpisode, HarmonizedDaily, Hotspot, IngestRun, SystemState
 from ..schemas import (
     BaselineInfo,
     DataMode,
@@ -151,7 +150,9 @@ def _store_counts(db: Session) -> StoreCounts:
     hotspots = int(db.scalar(select(func.count()).select_from(Hotspot)) or 0)
     harmonized_days = int(db.scalar(select(func.count()).select_from(HarmonizedDaily)) or 0)
     episodes = int(db.scalar(select(func.count()).select_from(FireEpisode)) or 0)
-    aois = int(db.scalar(select(func.count()).select_from(SystemState)) or 0)
+    # AOI count must come from the AOI table, not from SystemState (which
+    # also holds seed/pipeline/live bookkeeping keys).
+    aois = int(db.scalar(select(func.count()).select_from(Aoi)) or 0)
     lo = db.scalar(select(func.min(HarmonizedDaily.local_date)))
     hi = db.scalar(select(func.max(HarmonizedDaily.local_date)))
     cfg = get_settings()

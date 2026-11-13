@@ -26,7 +26,7 @@ seed:
 	docker compose run --rm seeder
 
 test:
-	cd backend && python -m pytest tests -q
+	python -m pytest tests -q
 
 backfill-dry:
 	docker compose exec backend python scripts/backfill_firms.py --dry-run
