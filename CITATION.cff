@@ -1,0 +1,62 @@
+cff-version: 1.2.0
+message: "If you use EmberEye in research, teaching, or a demo, please cite this repository."
+title: "EmberEye: Harmonization of MODIS and VIIRS Hot Spots"
+abstract: >-
+  EmberEye is an Earth-observation intelligence platform that harmonizes 26
+  years (2000-2026) of NASA MODIS and VIIRS active-fire detections into a
+  single, cross-calibrated burning-activity record. It combines
+  comparable-subset month-of-year transfer functions, spatiotemporal duplicate
+  suppression, intra-VIIRS constellation normalization, leave-one-year-out
+  climatology, and KD-tree episode clustering.
+type: software
+version: "1.0.7"
+date-released: "2026-11-13"
+license: MIT
+repository-code: "https://github.com/3lyly0/embereye-spaceapps"
+url: "https://github.com/3lyly0/embereye-spaceapps"
+keywords:
+  - earth observation
+  - active fire
+  - MODIS
+  - VIIRS
+  - NASA FIRMS
+  - remote sensing
+  - geospatial
+  - harmonization
+  - open science
+authors:
+  - name: "Team Gaia Saviors"
+    website: "https://github.com/3lyly0/embereye-spaceapps"
+references:
+  - type: article
+    title: "The Collection 6 MODIS active fire detection algorithm and fire products"
+    authors:
+      - family-names: Giglio
+        given-names: Louis
+      - family-names: Schroeder
+        given-names: Wilfrid
+      - family-names: Justice
+        given-names: Christopher O.
+    journal: Remote Sensing of Environment
+    volume: 178
+    start: 31
+    end: 43
+    year: 2016
+    doi: "10.1016/j.rse.2016.02.054"
+  - type: article
+    title: "The New VIIRS 375 m active fire detection data product: Algorithm description and initial assessment"
+    authors:
+      - family-names: Schroeder
+        given-names: Wilfrid
+      - family-names: Oliva
+        given-names: Patricia
+      - family-names: Giglio
+        given-names: Louis
+      - family-names: Csiszar
+        given-names: Ivan A.
+    journal: Remote Sensing of Environment
+    volume: 143
+    start: 85
+    end: 96
+    year: 2014
+    doi: "10.1016/j.rse.2013.12.008"
