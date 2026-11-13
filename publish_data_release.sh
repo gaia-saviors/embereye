@@ -65,7 +65,10 @@ if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
   warn "Tag ${TAG} already exists locally at HEAD — keeping it."
 else
   log "Creating annotated tag ${TAG} at ${TAG_DATE}"
-  GIT_COMMITTER_DATE="${TAG_DATE}" git tag -a "$TAG" -m "Release v1.0.0 offline database"
+  GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-Manus}" \
+  GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-dev-agent@manus.ai}" \
+  GIT_COMMITTER_DATE="${TAG_DATE}" \
+    git tag -a "$TAG" -m "Release ${TAG} offline database"
   ok "tag created"
 fi
 
@@ -155,6 +158,10 @@ if git diff --cached --quiet; then
   warn "README.md has no changes to commit — skipping commit and push."
 else
   log "Committing README update at ${COMMIT_DATE}"
+  GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-Manus}" \
+  GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-dev-agent@manus.ai}" \
+  GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-Manus}" \
+  GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-dev-agent@manus.ai}" \
   GIT_AUTHOR_DATE="${COMMIT_DATE}" \
   GIT_COMMITTER_DATE="${COMMIT_DATE}" \
     git commit -m "docs: add offline database download instructions to README"
