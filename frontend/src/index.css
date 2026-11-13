@@ -1,0 +1,177 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --color-bg: #0C0B0E;
+  --color-surface: #141318;
+  --color-surface-2: #1C1A22;
+  --color-border: #25232C;
+  --color-border-2: #383444;
+  --color-text: #F4F3F6;
+  --color-text-secondary: #A09CA8;
+  --color-text-muted: #686472;
+  --color-terra: #E04F33;
+  --color-amber: #E5A93C;
+  --color-jade: #10B981;
+  --color-coral: #F43F5E;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: #0C0B0E;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+  color: #F4F3F6;
+}
+
+/* Glassmorphic utility */
+.glass-hud {
+  background: rgba(20, 19, 24, 0.84);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Magma calendar gradient */
+.magma-ramp {
+  background: linear-gradient(90deg, #16141C, #3B182E, #7A1F34, #C83E2B, #F08C2E, #FFF3B0);
+}
+
+/* Viridis accessible gradient (deuteranopia / protanopia safe) */
+.viridis-ramp {
+  background: linear-gradient(90deg, #16141C, #440154, #3B528B, #21918C, #5EC962, #FDE725);
+}
+
+/* Cividis accessible gradient (red-green blindness optimized) */
+.cividis-ramp {
+  background: linear-gradient(90deg, #16141C, #00204D, #414D6B, #7C7B78, #BFAF6F, #FFEA46);
+}
+
+/* Scrollbars */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: #141318;
+}
+::-webkit-scrollbar-thumb {
+  background: #383444;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4A4557;
+}
+
+/* Tooltip */
+.ember-tooltip {
+  pointer-events: none;
+  position: fixed;
+  z-index: 80;
+  background: rgba(20, 19, 24, 0.95);
+  border: 1px solid #25232C;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+/* MapLibre overrides */
+.maplibregl-ctrl-attrib {
+  background: rgba(20, 19, 24, 0.75) !important;
+  color: #A09CA8 !important;
+  font-size: 10px !important;
+}
+.maplibregl-ctrl-attrib a {
+  color: #A09CA8 !important;
+}
+.maplibregl-popup-content {
+  background: #141318 !important;
+  color: #F4F3F6 !important;
+  border: 1px solid #25232C !important;
+  border-radius: 8px !important;
+  font-size: 12px !important;
+  padding: 8px 10px !important;
+  font-family: "Inter", system-ui, sans-serif !important;
+}
+.maplibregl-popup-tip {
+  border-top-color: #141318 !important;
+  border-bottom-color: #141318 !important;
+}
+.maplibregl-ctrl-group {
+  background: rgba(20, 19, 24, 0.84) !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+  backdrop-filter: blur(12px) !important;
+}
+.maplibregl-ctrl-group button {
+  background-color: transparent !important;
+  color: #A09CA8 !important;
+}
+.maplibregl-ctrl-group button:hover {
+  background-color: rgba(224,79,51,0.12) !important;
+  color: #E04F33 !important;
+}
+
+/* Range input accent */
+input[type="range"] {
+  accent-color: #E04F33;
+}
+input[type="checkbox"] {
+  accent-color: #E04F33;
+}
+
+/* Number inputs — JetBrains Mono */
+input[type="number"] {
+  font-family: "JetBrains Mono", monospace;
+}
+input[type="date"] {
+  font-family: "JetBrains Mono", monospace;
+  color-scheme: dark;
+}
+
+/* Segmented pill base */
+.seg-pill {
+  display: inline-flex;
+  border-radius: 9999px;
+  background: #1C1A22;
+  border: 1px solid #25232C;
+  padding: 2px;
+  gap: 1px;
+}
+.seg-pill button {
+  border-radius: 9999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  transition: background 0.15s, color 0.15s;
+  color: #A09CA8;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.seg-pill button.active {
+  background: #E04F33;
+  color: #F4F3F6;
+}
+.seg-pill button:not(.active):hover {
+  color: #F4F3F6;
+  background: rgba(255,255,255,0.05);
+}
