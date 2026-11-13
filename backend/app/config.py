@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "EmberEye"
-    app_version: str = "1.0.8"
+    app_version: str = "1.0.9"
     seed_version: str = "2026.10.1"
     log_level: str = "INFO"
     cors_origins: str = "*"

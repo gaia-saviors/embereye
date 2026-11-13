@@ -160,13 +160,18 @@ def test_create_aoi_runs_aggregation_job(monkeypatch):
         },
     )
     assert resp.status_code == 201, resp.text
-    aoi_id = resp.json()["id"]
+    payload = resp.json()
+    aoi_id = payload["id"]
+    assert payload["has_data"] is False
+    assert payload["job_id"]
 
     db = SessionLocal()
     try:
         job = db.query(AggregationJob).filter(AggregationJob.aoi_id == aoi_id).one()
         assert job.status == "DONE", job.message
         assert "NameError" not in (job.message or "")
+        assert client.get(f"/api/jobs/{payload['job_id']}").json()["status"] == "DONE"
+        assert client.get(f"/api/aois/{aoi_id}").json()["job_id"] == payload["job_id"]
     finally:
         db.close()
 
@@ -357,3 +362,29 @@ def test_geojson_streaming_export_fast_and_valid():
         assert "sensor" in f0["properties"]
         assert "frp_mw" in f0["properties"]
 
+
+def test_hotspot_export_applies_frontend_filters():
+    import csv
+    import io
+
+    _ensure_seeded()
+    params = {
+        "aoi": "nile-delta-egypt", "level": "hotspots", "format": "csv",
+        "start": "2020-01-01", "end": "2020-03-31",
+    }
+    baseline = client.get("/api/export", params=params)
+    assert baseline.status_code == 200
+    rows_all = list(csv.DictReader(io.StringIO(baseline.text)))
+    filtered_params = {
+        **params, "sensor": "VIIRS", "confidence": "HIGH", "daynight": "D",
+        "min_frp": 0.1, "hide_static": "true",
+    }
+    filtered = client.get("/api/export", params=filtered_params)
+    assert filtered.status_code == 200
+    rows_filtered = list(csv.DictReader(io.StringIO(filtered.text)))
+    assert len(rows_filtered) <= len(rows_all)
+    assert all(row["sensor"] == "VIIRS" for row in rows_filtered)
+    assert all(row["confidence"] == "HIGH" for row in rows_filtered)
+    assert all(row["daynight"] == "D" for row in rows_filtered)
+    assert all(float(row["frp_mw"]) >= 0.1 for row in rows_filtered)
+    assert all(row["static_source"].lower() in {"false", "0"} for row in rows_filtered)

@@ -72,6 +72,7 @@ export const api = {
   meta: () => request<MetaResponse>("/meta"),
 
   listAois: () => request<Aoi[]>("/aois"),
+  getAoi: (id: string) => request<Aoi>(`/aois/${id}`),
   createAoi: (name: string, description: string, geojson: unknown) =>
     request<Aoi>("/aois", {
       method: "POST",
@@ -91,6 +92,7 @@ export const api = {
     confidence?: string;
     daynight?: string;
     min_frp?: number;
+    hide_static?: boolean;
     limit?: number;
     offset?: number;
     bbox?: string;
@@ -138,6 +140,7 @@ export const api = {
     confidence?: string;
     daynight?: string;
     min_frp?: number;
+    hide_static?: boolean;
   }) => request<GridResponse>(`/hotspots/grid${qs(params)}`),
 
   calendar: (
@@ -199,5 +202,9 @@ export const api = {
     start?: string;
     end?: string;
     sensor?: string;
+    confidence?: string;
+    daynight?: string;
+    min_frp?: number;
+    hide_static?: boolean;
   }): string => `${BASE}/export${qs(params)}`,
 };

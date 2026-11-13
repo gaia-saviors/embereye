@@ -34,11 +34,13 @@ interface EmberState {
   aois: Aoi[];
   setAois: (a: Aoi[]) => void;
   aoiId: string | null;
-  setAoiId: (id: string) => void;
+  setAoiId: (id: string | null) => void;
 
   rangeStart: string;
   rangeEnd: string;
   setRange: (start: string, end: string) => void;
+  dataRevision: number;
+  bumpDataRevision: () => void;
   // Phase 3A (defect 8): the full record coverage, derived from /api/meta
   // (first/last acquisition). The timeline defaults to the FULL record -
   // not a hardcoded 2012-01-01 - and date inputs clamp to this range.
@@ -95,7 +97,11 @@ const todayIso = new Date().toISOString().slice(0, 10);
 
 export const useStore = create<EmberState>((set) => ({
   view: "calendar",
-  setView: (v) => set({ view: v }),
+  setView: (v) => set((s) => ({
+    view: v,
+    playing: v === "map" ? s.playing : false,
+    drawActive: v === "map" ? s.drawActive : false,
+  })),
 
   meta: null,
   health: null,
@@ -116,19 +122,48 @@ export const useStore = create<EmberState>((set) => ({
 
   rangeStart: "2012-01-01",
   rangeEnd: todayIso,
-  setRange: (start, end) => set({ rangeStart: start, rangeEnd: end }),
+  setRange: (start, end) => set((s) => {
+    const lower = s.recordStart ?? start;
+    const upper = s.recordEnd ?? end;
+    const nextStart = start < lower ? lower : start > upper ? upper : start;
+    const requestedEnd = end < lower ? lower : end > upper ? upper : end;
+    const nextEnd = requestedEnd < nextStart ? nextStart : requestedEnd;
+    const cursor = s.cursorDate == null
+      ? null
+      : s.cursorDate < nextStart ? nextStart
+      : s.cursorDate > nextEnd ? nextEnd
+      : s.cursorDate;
+    return { rangeStart: nextStart, rangeEnd: nextEnd, cursorDate: cursor };
+  }),
+  dataRevision: 0,
+  bumpDataRevision: () => set((s) => ({ dataRevision: s.dataRevision + 1 })),
   recordStart: null,
   recordEnd: null,
   rangeInitialized: false,
-  initRangeFromRecord: (start, end) =>
-    set((s) =>
-      s.rangeInitialized
-        ? { recordStart: start, recordEnd: end }
-        : { recordStart: start, recordEnd: end, rangeInitialized: true, rangeStart: start, rangeEnd: end },
-    ),
+  initRangeFromRecord: (start, end) => set((s) => {
+    const wasFullRange = s.rangeInitialized && s.rangeStart === s.recordStart && s.rangeEnd === s.recordEnd;
+    const nextStart = !s.rangeInitialized || wasFullRange || s.rangeStart < start ? start : s.rangeStart;
+    const requestedEnd = !s.rangeInitialized || wasFullRange || s.rangeEnd > end ? end : s.rangeEnd;
+    const nextEnd = requestedEnd < nextStart ? nextStart : requestedEnd;
+    const cursor = s.cursorDate == null
+      ? null
+      : s.cursorDate < nextStart ? nextStart
+      : s.cursorDate > nextEnd ? nextEnd
+      : s.cursorDate;
+    return {
+      recordStart: start,
+      recordEnd: end,
+      rangeInitialized: true,
+      rangeStart: nextStart,
+      rangeEnd: nextEnd,
+      cursorDate: cursor,
+    };
+  }),
 
   cursorDate: null,
-  setCursorDate: (d) => set({ cursorDate: d }),
+  setCursorDate: (d) => set((s) => ({
+    cursorDate: d == null ? null : d < s.rangeStart ? s.rangeStart : d > s.rangeEnd ? s.rangeEnd : d,
+  })),
 
   playing: false,
   setPlaying: (p) => set({ playing: p }),

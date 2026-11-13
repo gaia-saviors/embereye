@@ -175,6 +175,8 @@ class AoiOut(BaseModel):
     # loaded database - the UI disables the entry and labels it
     # "no data loaded in this version" instead of showing empty results.
     has_data: bool = True
+    # Job that is currently building this custom AOI, when applicable.
+    job_id: str | None = None
 
 
 class JobOut(BaseModel):

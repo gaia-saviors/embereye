@@ -54,14 +54,20 @@ export default function TimelineScrubber() {
   }, [totalDays]);
 
   return (
-    <div className="z-30 flex h-[64px] shrink-0 items-center gap-4 border-t border-basalt-300 bg-basalt-100 px-5 shadow-lg">
+    <div className="z-30 flex min-h-[64px] shrink-0 flex-wrap items-center gap-3 border-t border-basalt-300 bg-basalt-100 px-3 py-2 shadow-lg sm:gap-4 sm:px-5">
       {/* Play/Pause Button */}
       <button
         onClick={() => {
+          if (playing) {
+            setPlaying(false);
+            return;
+          }
           setView("map");
-          if (!cursorDate) setCursorDate(rangeEnd);
-          setPlaying(!playing);
+          if (!cursorDate || cursorDate >= rangeEnd) setCursorDate(rangeStart);
+          setPlaying(totalDays > 0);
         }}
+        disabled={totalDays <= 0}
+        aria-pressed={playing}
         className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border text-sm font-bold shadow-sm transition-all ${
           playing
             ? "border-terra bg-terra text-alabaster shadow-terra/30"
@@ -73,12 +79,13 @@ export default function TimelineScrubber() {
       </button>
 
       {/* Speed Selector */}
-      <div className="flex items-center gap-1 text-[10px] text-muted font-display">
+      <div className="flex shrink-0 items-center gap-1 text-[10px] text-muted font-display">
         <span className="mr-1 tracking-wider uppercase font-semibold">Speed</span>
         {[1, 3, 7].map((n) => (
           <button
             key={n}
             onClick={() => setSpeed(n)}
+            aria-pressed={speed === n}
             className={`rounded-lg px-2 py-1 font-mono font-semibold transition ${
               speed === n
                 ? "bg-terra text-alabaster shadow-sm"
@@ -91,7 +98,7 @@ export default function TimelineScrubber() {
       </div>
 
       {/* Timeline Slider Track */}
-      <div className="relative min-w-0 flex-1">
+      <div className="relative min-w-[180px] flex-1 basis-[220px]">
         <input
           type="range"
           min={0}

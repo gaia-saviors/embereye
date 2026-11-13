@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api/client";
-import type { CalendarCell, CalendarResponse, TransferredWeek } from "../api/types";
+import type { CalendarCell, CalendarResponse, HeadlineResponse, TransferredWeek } from "../api/types";
 import { useStore, PROVENANCE_LABEL, PROVENANCE_COLOR } from "../store";
 import { calendarCacheKey, getCachedCalendar, setCachedCalendar } from "../lib/calendarCache";
 import { rampColor, SENSOR_COLOR, ANOMALY_HIGH, ANOMALY_LOW } from "../lib/colors";
@@ -22,6 +22,9 @@ export default function CalendarView() {
   const setCursorDate = useStore((s) => s.setCursorDate);
   const setView = useStore((s) => s.setView);
   const meta = useStore((s) => s.meta);
+  const rangeStart = useStore((s) => s.rangeStart);
+  const rangeEnd = useStore((s) => s.rangeEnd);
+  const dataRevision = useStore((s) => s.dataRevision);
   const filters = useStore((s) => s.filters);
   const anomalyOverlay = filters.anomalyOverlay;
 
@@ -42,17 +45,19 @@ export default function CalendarView() {
   const [p99Week, setP99Week] = useState(200);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [headline, setHeadline] = useState<HeadlineResponse | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(1100);
 
   const activeAoi = aois.find((a) => a.id === aoiId);
 
-  const startYear = yearFilter === "last10" ? 2016 : yearFilter === "viirs" ? 2012 : undefined;
+  const yearFilterStart = yearFilter === "last10" ? "2016-01-01" : yearFilter === "viirs" ? "2012-01-01" : null;
+  const calendarStart = yearFilterStart && rangeStart < yearFilterStart ? yearFilterStart : rangeStart;
   const { sensor, confidence, daynight, minFrp, hideStaticSources } = filters;
   const cacheKey = aoiId
     ? calendarCacheKey(aoiId, yearFilter, {
         sensor, confidence, daynight, minFrp, hideStaticSources,
-      })
+      }, rangeStart, rangeEnd, dataRevision)
     : "";
 
   // Human-readable summary of what the matrix is currently counting. With no
@@ -113,9 +118,10 @@ export default function CalendarView() {
     let alive = true;
     setLoading(true);
     setError(null);
-    api
-      .calendar(aoiId, {
-        startYear,
+      api
+        .calendar(aoiId, {
+        start: calendarStart,
+        end: rangeEnd,
         sensor,
         confidence,
         daynight,
@@ -132,7 +138,20 @@ export default function CalendarView() {
     return () => {
       alive = false;
     };
-  }, [aoiId, cacheKey, startYear, sensor, confidence, daynight, minFrp, hideStaticSources, setCalendar]);
+  }, [aoiId, cacheKey, calendarStart, rangeEnd, dataRevision, sensor, confidence, daynight, minFrp, hideStaticSources, setCalendar]);
+
+  useEffect(() => {
+    if (!aoiId) {
+      setHeadline(null);
+      return;
+    }
+    let alive = true;
+    setHeadline(null);
+    api.headline(aoiId)
+      .then((result) => alive && setHeadline(result))
+      .catch(() => alive && setHeadline(null));
+    return () => { alive = false; };
+  }, [aoiId, dataRevision]);
 
   const years = calendar?.summary.years ?? [];
   const viirsStart = calendar?.viirs_start_date ?? null;
@@ -338,6 +357,15 @@ export default function CalendarView() {
   const svgH = TOP + years.length * ROW_H + 28;
 
   const selectedCell = selected ? cellByDate.get(selected) ?? null : null;
+  const completeMonthLabel = headline?.complete_month
+    ? `${MONTHS[Number(headline.complete_month.slice(5, 7)) - 1]} ${headline.complete_month.slice(0, 4)}`
+    : "—";
+  const partialMonthLabel = headline?.month
+    ? `${MONTHS[Number(headline.month.slice(5, 7)) - 1]} ${headline.month.slice(0, 4)}`
+    : null;
+  const completeDeltaPct = headline?.complete_total != null && headline.complete_median != null && headline.complete_median > 0
+    ? ((headline.complete_total - headline.complete_median) / headline.complete_median) * 100
+    : null;
 
   if (!aoiId) {
     return <Empty message="Select an area of interest from the control bar above." />;
@@ -406,33 +434,31 @@ export default function CalendarView() {
           </div>
         </div>
 
-        {/* Card 3: NASA Challenge Comparison — Current Month vs Historical Median */}
+        {/* Card 3: last complete month, compared against the matching historical month */}
         <div className="rounded-xl border border-basalt-300 bg-basalt-100 p-3.5 flex flex-col justify-between shadow-sm">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold tracking-widest text-muted uppercase font-mono">
-              Latest Month vs. Median
+            <span className="text-[10px] font-bold tracking-widest text-muted uppercase font-mono" title="Full harmonized archive headline; independent of current range and ribbon filters">
+              Last Complete Month vs. Median
             </span>
-            <span className={`h-2 w-2 rounded-full ${(monthMetrics?.deltaPct ?? 0) >= 0 ? "bg-coral" : "bg-jade"}`} />
+            <span className={`h-2 w-2 rounded-full ${completeDeltaPct == null ? "bg-muted" : completeDeltaPct >= 0 ? "bg-coral" : "bg-jade"}`} />
           </div>
           <div className="my-1 flex items-baseline gap-2">
             <span className="font-mono text-lg font-bold text-alabaster">
-              {monthMetrics?.latestMonthName} {monthMetrics?.latestYear}
+              {completeMonthLabel}
             </span>
-            <span
-              className={`rounded px-1.5 py-0.5 font-mono text-[11px] font-bold ${
-                (monthMetrics?.deltaPct ?? 0) >= 10
-                  ? "bg-coral/15 text-coral"
-                  : (monthMetrics?.deltaPct ?? 0) <= -10
-                  ? "bg-jade/15 text-jade"
-                  : "bg-basalt-300 text-pewter"
-              }`}
-            >
-              {(monthMetrics?.deltaPct ?? 0) >= 0 ? "+" : ""}
-              {(monthMetrics?.deltaPct ?? 0).toFixed(1)}%
-            </span>
+            {completeDeltaPct != null && (
+              <span className={`rounded px-1.5 py-0.5 font-mono text-[11px] font-bold ${completeDeltaPct >= 10 ? "bg-coral/15 text-coral" : completeDeltaPct <= -10 ? "bg-jade/15 text-jade" : "bg-basalt-300 text-pewter"}`}>
+                {completeDeltaPct >= 0 ? "+" : ""}{completeDeltaPct.toFixed(1)}%
+              </span>
+            )}
           </div>
-          <div className="text-[10px] text-pewter truncate">
-            Median: <span className="font-mono text-alabaster font-semibold">{fmtInt(monthMetrics?.histMedian)}</span> · Peak: <span className="font-mono text-amber">{monthMetrics?.peakMonthStr} ({fmtInt(monthMetrics?.peakTotal)})</span>
+          <div className="text-[10px] text-pewter truncate" title={headline?.complete_note ?? undefined}>
+            Median: <span className="font-mono font-semibold text-alabaster">{fmtInt(headline?.complete_median ?? undefined)}</span> · Actual: <span className="font-mono font-semibold text-alabaster">{fmtInt(headline?.complete_total ?? undefined)}</span>
+          </div>
+          <div className="mt-1 truncate text-[9px] text-muted" title={headline?.provisional_note ?? undefined}>
+            {headline?.current_partial && partialMonthLabel ? `${partialMonthLabel} in progress · ${headline.days_in_month} day(s) observed` : headline ? "Latest available month is complete" : "Loading headline…"}
+            {headline?.provisional ? " · NRT provisional tail" : ""}
+            {monthMetrics?.peakMonthStr ? ` · View peak: ${monthMetrics.peakMonthStr}` : ""}
           </div>
         </div>
 
@@ -442,11 +468,11 @@ export default function CalendarView() {
             <span className="text-[10px] font-bold tracking-widest text-muted uppercase font-mono">Sensor Calibration</span>
             <span className="h-2 w-2 rounded-full bg-jade" />
           </div>
-          <div className="my-1.5 font-mono text-2xl font-semibold text-[#10B981]">
-            R² = 0.852
+          <div className="my-1.5 line-clamp-2 font-display text-sm font-semibold text-jade" title={kpis.calibration}>
+            {kpis.calibration}
           </div>
           <div className="text-[10px] text-pewter truncate">
-            Comparable-subset transfer · MODIS 1km → VIIRS 375m
+            Calibration method · MODIS 1 km → VIIRS 375 m
           </div>
         </div>
       </div>
@@ -479,6 +505,7 @@ export default function CalendarView() {
             <div className="flex items-center rounded-lg border border-basalt-300 bg-basalt-200 p-0.5 text-[11px] font-display">
               <button
                 onClick={() => setMatrixView("daily")}
+                aria-pressed={matrixView === "daily"}
                 className={`rounded-md px-2.5 py-1 font-semibold transition ${
                   matrixView === "daily" ? "bg-terra text-alabaster shadow-sm" : "text-pewter hover:text-alabaster"
                 }`}
@@ -487,6 +514,7 @@ export default function CalendarView() {
               </button>
               <button
                 onClick={() => setMatrixView("monthly")}
+                aria-pressed={matrixView === "monthly"}
                 className={`rounded-md px-2.5 py-1 font-semibold transition ${
                   matrixView === "monthly" ? "bg-terra text-alabaster shadow-sm" : "text-pewter hover:text-alabaster"
                 }`}
@@ -499,6 +527,7 @@ export default function CalendarView() {
             <div className="flex items-center rounded-lg border border-basalt-300 bg-basalt-200 p-0.5 text-[10px] font-mono">
               <button
                 onClick={() => setColorRamp("magma")}
+                aria-pressed={colorRamp === "magma"}
                 className={`rounded-md px-2 py-1 transition ${
                   colorRamp === "magma" ? "bg-basalt-400 text-alabaster font-bold" : "text-muted hover:text-alabaster"
                 }`}
@@ -508,6 +537,7 @@ export default function CalendarView() {
               </button>
               <button
                 onClick={() => setColorRamp("viridis")}
+                aria-pressed={colorRamp === "viridis"}
                 className={`rounded-md px-2 py-1 transition ${
                   colorRamp === "viridis" ? "bg-basalt-400 text-alabaster font-bold" : "text-muted hover:text-alabaster"
                 }`}
@@ -517,6 +547,7 @@ export default function CalendarView() {
               </button>
               <button
                 onClick={() => setColorRamp("cividis")}
+                aria-pressed={colorRamp === "cividis"}
                 className={`rounded-md px-2 py-1 transition ${
                   colorRamp === "cividis" ? "bg-basalt-400 text-alabaster font-bold" : "text-muted hover:text-alabaster"
                 }`}
@@ -541,6 +572,7 @@ export default function CalendarView() {
             <div className="flex items-center rounded-lg border border-basalt-300 bg-basalt-200 p-0.5 text-[11px] font-display">
               <button
                 onClick={() => setYearFilter("all")}
+                aria-pressed={yearFilter === "all"}
                 className={`rounded-md px-2.5 py-1 font-semibold transition ${
                   yearFilter === "all" ? "bg-terra text-alabaster shadow-sm" : "text-pewter hover:text-alabaster"
                 }`}
@@ -549,6 +581,7 @@ export default function CalendarView() {
               </button>
               <button
                 onClick={() => setYearFilter("last10")}
+                aria-pressed={yearFilter === "last10"}
                 className={`rounded-md px-2.5 py-1 font-semibold transition ${
                   yearFilter === "last10" ? "bg-terra text-alabaster shadow-sm" : "text-pewter hover:text-alabaster"
                 }`}
@@ -557,6 +590,7 @@ export default function CalendarView() {
               </button>
               <button
                 onClick={() => setYearFilter("viirs")}
+                aria-pressed={yearFilter === "viirs"}
                 className={`rounded-md px-2.5 py-1 font-semibold transition ${
                   yearFilter === "viirs" ? "bg-terra text-alabaster shadow-sm" : "text-pewter hover:text-alabaster"
                 }`}
@@ -575,8 +609,8 @@ export default function CalendarView() {
               height={svgH}
               className="block select-none"
               onMouseLeave={() => setHover(null)}
-              role="img"
-              aria-label="Multi-year burning activity calendar"
+              role="group"
+              aria-label="Interactive multi-year burning activity calendar"
             >
               <defs>
                 <pattern id={ESTIMATED_HATCH_ID} width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
@@ -682,7 +716,7 @@ export default function CalendarView() {
                               height={ROW_H - 4}
                               rx={2}
                               fill={val > 0 ? rampColor(Math.pow(t, 0.6), colorRamp) : "#141318"}
-                              className="cursor-pointer transition-colors"
+                              className="cursor-help transition-colors"
                               onMouseEnter={(e) =>
                                 setHover({
                                   kind: "month",
@@ -747,9 +781,18 @@ export default function CalendarView() {
                                   height={ROW_H - 4}
                                   fill={w.n_harmonized > 0 ? rampColor(Math.pow(t, 0.6), colorRamp) : "#141318"}
                                   opacity={0.88}
-                                  className="cursor-pointer"
+                                  className="cursor-pointer focus-visible:outline-none"
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`Select week ${w.iso_week}, ${w.year}, ${fmtInt(w.n_harmonized)} harmonized detections`}
                                   onMouseEnter={(e) => setHover({ kind: "week", week: w, x: e.clientX, y: e.clientY })}
                                   onClick={() => setSelected(w.start_date)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      setSelected(w.start_date);
+                                    }
+                                  }}
                                 />
                                 <rect
                                   x={x}
@@ -804,9 +847,18 @@ export default function CalendarView() {
                                   fill={c.provenance === "NO_DATA" ? "#141318" : rampColor(Math.pow(t, 0.6), colorRamp)}
                                   stroke={isSel ? "#FFF3B0" : undefined}
                                   strokeWidth={isSel ? 1.4 : 0}
-                                  className="cursor-pointer"
+                                  className="cursor-pointer focus-visible:outline-none"
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`Select ${c.date}, ${fmtInt(c.n_harmonized)} harmonized detections`}
                                   onMouseEnter={(e) => setHover({ kind: "day", cell: c, x: e.clientX, y: e.clientY })}
                                   onClick={() => setSelected(c.date)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      setSelected(c.date);
+                                    }
+                                  }}
                                 />
                                 {flaggedLow && (
                                   <circle

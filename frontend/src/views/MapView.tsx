@@ -72,12 +72,42 @@ const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", feature
 const snapCache = new Map<string, SnapshotData>();
 const snapKeyOf = (
   aoi: string | null, f: { sensor: string; confidence: string; daynight: string; minFrp: number | null },
-) => `${aoi}|${f.sensor}|${f.confidence}|${f.daynight}|${f.minFrp ?? ""}`;
+  revision: number,
+) => `${aoi}|${f.sensor}|${f.confidence}|${f.daynight}|${f.minFrp ?? ""}|${revision}`;
 
 function isSnapshotRedirect(
   r: SnapshotData | SnapshotRedirect,
 ): r is SnapshotRedirect {
   return "mode" in r && (r as SnapshotRedirect).mode === "grid";
+}
+
+function periodForDate(day: string, resolution: "week" | "month", rangeStart: string, rangeEnd: string) {
+  const date = new Date(`${day}T00:00:00Z`);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth();
+  let start: Date;
+  let end: Date;
+  if (resolution === "week") {
+    const mondayOffset = (date.getUTCDay() + 6) % 7;
+    start = new Date(Date.UTC(year, month, date.getUTCDate() - mondayOffset));
+    end = new Date(Date.UTC(year, month, date.getUTCDate() - mondayOffset + 6));
+  } else {
+    start = new Date(Date.UTC(year, month, 1));
+    end = new Date(Date.UTC(year, month + 1, 0));
+  }
+  const toIso = (value: Date) => value.toISOString().slice(0, 10);
+  const periodStart = toIso(start);
+  const periodEnd = toIso(end);
+  const clippedStart = periodStart < rangeStart ? rangeStart : periodStart;
+  const clippedEnd = periodEnd > rangeEnd ? rangeEnd : periodEnd;
+  const bucket = resolution === "week" ? `Week of ${periodStart}` : periodStart.slice(0, 7);
+  return { start: clippedStart, end: clippedEnd, bucket };
+}
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? "—").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[char] ?? char);
 }
 
 export default function MapView() {
@@ -87,11 +117,16 @@ export default function MapView() {
 
   const aois = useStore((s) => s.aois);
   const aoiId = useStore((s) => s.aoiId);
+  const selectedAoi = aois.find((a) => a.id === aoiId);
+  const selectedWest = selectedAoi?.west;
+  const selectedSouth = selectedAoi?.south;
+  const selectedEast = selectedAoi?.east;
+  const selectedNorth = selectedAoi?.north;
   const cursorDate = useStore((s) => s.cursorDate);
   const rangeStart = useStore((s) => s.rangeStart);
   const rangeEnd = useStore((s) => s.rangeEnd);
+  const dataRevision = useStore((s) => s.dataRevision);
   const filters = useStore((s) => s.filters);
-  const mapToast = useStore((s) => s.mapToast);
   const setMapToast = useStore((s) => s.setMapToast);
   const playing = useStore((s) => s.playing);
   const drawActive = useStore((s) => s.drawActive);
@@ -112,10 +147,14 @@ export default function MapView() {
   const drawModeRef = useRef<"off" | "polygon">("off");
   const [, forceRender] = useState(0);
   const drawPts = useRef<number[][]>([]);
+  const [drawPointCount, setDrawPointCount] = useState(0);
 
   const setDrawMode = useCallback((mode: "off" | "polygon") => {
     drawModeRef.current = mode;
-    if (mode === "off") drawPts.current = [];
+    if (mode === "off") {
+      drawPts.current = [];
+      setDrawPointCount(0);
+    }
     forceRender((n) => n + 1);
   }, []);
 
@@ -138,7 +177,7 @@ export default function MapView() {
       attributionControl: { compact: true },
     });
     mapRef.current = map;
-    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-left");
 
     map.on("load", () => {
@@ -146,13 +185,16 @@ export default function MapView() {
       map.addSource("aois", { type: "geojson", data: EMPTY_FC });
       map.addLayer({
         id: "aoi-fill", type: "fill", source: "aois",
-        paint: { "fill-color": "#E5A93C", "fill-opacity": 0.04 },
+        paint: {
+          "fill-color": ["case", ["boolean", ["get", "selected"], false], "#FFF3B0", "#E5A93C"],
+          "fill-opacity": ["case", ["boolean", ["get", "selected"], false], 0.1, 0.035],
+        },
       });
       map.addLayer({
         id: "aoi-line", type: "line", source: "aois",
         paint: {
-          "line-color": "#E5A93C",
-          "line-width": 2,
+          "line-color": ["case", ["boolean", ["get", "selected"], false], "#FFF3B0", "#E5A93C"],
+          "line-width": ["case", ["boolean", ["get", "selected"], false], 3, 1.5],
           "line-opacity": 0.9,
           "line-dasharray": [4, 3],
         },
@@ -222,17 +264,22 @@ export default function MapView() {
       });
 
       map.on("click", "hs-circle", (e) => {
+        if (drawModeRef.current === "polygon") return;
         const f = e.features?.[0];
         if (!f) return;
         const p = f.properties as Record<string, unknown>;
+        const sensor = escapeHtml(p.sensor);
+        const satellite = escapeHtml(p.satellite);
+        const acqDate = escapeHtml(p.acq_dt_utc).slice(0, 16).replace("T", " ");
+        const confidence = escapeHtml(p.confidence);
         new maplibregl.Popup({ closeButton: false })
           .setLngLat((f.geometry as unknown as { coordinates: [number, number] }).coordinates)
           .setHTML(
-            `<b style="color:${p.sensor === "MODIS" ? SENSOR_COLOR.MODIS : SENSOR_COLOR.VIIRS}">${p.sensor} · ${p.satellite}</b><br>` +
-              `<span style="font-family:JetBrains Mono,monospace;font-size:11px;">${String(p.acq_dt_utc).slice(0, 16).replace("T", " ")} UTC</span><br>` +
+            `<b style="color:${p.sensor === "MODIS" ? SENSOR_COLOR.MODIS : SENSOR_COLOR.VIIRS}">${sensor} · ${satellite}</b><br>` +
+              `<span style="font-family:JetBrains Mono,monospace;font-size:11px;">${acqDate} UTC</span><br>` +
               `FRP: <b>${p.frp_mw == null ? "—" : Number(p.frp_mw).toFixed(1)} MW</b> · ` +
               `T4: <b>${p.t4_k == null ? "—" : Number(p.t4_k).toFixed(0)} K</b><br>` +
-              `Conf: ${p.confidence} · ${p.daynight === "D" ? "Day" : "Night"}` +
+              `Conf: ${confidence} · ${p.daynight === "D" ? "Day" : "Night"}` +
               (p.saturated ? " · <b style=\"color:#F43F5E;\">I4 SATURATED</b>" : "") +
               (p.band21_fallback ? " · band-21 fallback" : "") +
               (p.static_source ? " · static flare (type 2)" : "") +
@@ -267,26 +314,34 @@ export default function MapView() {
         properties: { id: a.id, name: a.name, selected: a.id === aoiId },
       })),
     });
-    const sel = aois.find((a) => a.id === aoiId);
-    if (sel) {
-      map.fitBounds(
-        [
-          [sel.west, sel.south],
-          [sel.east, sel.north],
-        ],
-        { padding: 60, duration: 600, maxZoom: 9 },
-      );
-    }
   }, [aois, aoiId, mapReady]);
 
+  // Only reframe when the selected AOI bounds change (or the map initializes).
+  // Refreshing the AOI list after a background job must not undo a user's pan/zoom.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map || selectedWest == null || selectedSouth == null || selectedEast == null || selectedNorth == null) return;
+    map.fitBounds(
+      [[selectedWest, selectedSouth], [selectedEast, selectedNorth]],
+      { padding: 60, duration: 600, maxZoom: 9 },
+    );
+  }, [mapReady, selectedWest, selectedSouth, selectedEast, selectedNorth]);
+
   // ---- archive load --------------------------------------------------------
-  const attrKey = snapKeyOf(aoiId, filters);
+  const attrKey = snapKeyOf(aoiId, filters, dataRevision);
+  const gridPeriod = useMemo(
+    () => periodForDate(cursorDate ?? rangeEnd, gridRes, rangeStart, rangeEnd),
+    [cursorDate, gridRes, rangeStart, rangeEnd],
+  );
   const [snapRedirect, setSnapRedirect] = useState<SnapshotRedirect | null>(null);
 
   useEffect(() => {
     if (!aoiId || !mapReady) return;
     let alive = true;
     setArchiveErr(null);
+    setRawFeat([]);
+    setRawTotal(0);
+    setRawTruncated(false);
     const cached = snapCache.get(attrKey);
     if (cached) {
       setSnap(cached);
@@ -340,11 +395,16 @@ export default function MapView() {
     if (!aoiId || !mapReady || snap || !snapRedirect) return;
     let alive = true;
     setLoading(true);
+    setGrid(null);
+    setRawFeat([]);
+    setRawTotal(0);
+    setRawTruncated(false);
     api
       .grid({
-        aoi: aoiId, res: gridRes, cell_deg: 0.5,
+        aoi: aoiId, res: gridRes, start: gridPeriod.start, end: gridPeriod.end, cell_deg: 0.5,
         sensor: filters.sensor, confidence: filters.confidence,
         daynight: filters.daynight, min_frp: filters.minFrp ?? undefined,
+        hide_static: filters.hideStaticSources,
       })
       .then((g) => {
         if (!alive) return;
@@ -360,7 +420,7 @@ export default function MapView() {
                 type: "Polygon" as const,
                 coordinates: [[[c.w, c.s], [c.e, c.s], [c.e, c.n_], [c.w, c.n_], [c.w, c.s]]],
               },
-              properties: { n: c.n, frp: c.frp_mw },
+              properties: { n: c.n, frp: c.frp_mw, bucket: c.bucket, n_modis: c.n_modis, n_viirs: c.n_viirs, n_static: c.n_static },
             })),
           });
           const vis = snap ? "none" : "visible";
@@ -373,7 +433,7 @@ export default function MapView() {
     return () => {
       alive = false;
     };
-  }, [aoiId, mapReady, snap, snapRedirect, gridRes, filters]);
+  }, [aoiId, mapReady, snap, snapRedirect, gridRes, gridPeriod.start, gridPeriod.end, filters]);
 
   // Viewport tracking for grid mode
   const [viewTick, setViewTick] = useState(0);
@@ -428,22 +488,23 @@ export default function MapView() {
     if (!map) return;
     const ac = new AbortController();
     const t = window.setTimeout(() => {
-      const b = map.getBounds();
-      const day = cursorDate ?? rangeEnd;
+      const bounds = map.getBounds();
       api
         .hotspots({
           aoi: aoiId,
-          bbox: `${b.getWest().toFixed(4)},${b.getSouth().toFixed(4)},${b.getEast().toFixed(4)},${b.getNorth().toFixed(4)}`,
-          start: day, end: day,
-          sensor: filters.sensor, confidence: filters.confidence,
-          daynight: filters.daynight, min_frp: filters.minFrp ?? undefined,
+          bbox: `${bounds.getWest().toFixed(4)},${bounds.getSouth().toFixed(4)},${bounds.getEast().toFixed(4)},${bounds.getNorth().toFixed(4)}`,
+          start: gridPeriod.start,
+          end: gridPeriod.end,
+          sensor: filters.sensor,
+          confidence: filters.confidence,
+          daynight: filters.daynight,
+          min_frp: filters.minFrp ?? undefined,
+          hide_static: filters.hideStaticSources,
           limit: 20000,
         }, ac.signal)
         .then((res) => {
           let feats = res.features;
-          if (filters.hideStaticSources) {
-            feats = feats.filter((f) => !f.properties.static_source);
-          }
+          if (filters.hideStaticSources) feats = feats.filter((f) => !f.properties.static_source);
           setRawFeat(feats);
           setRawTotal(res.meta.total);
           setRawTruncated(res.meta.total > res.meta.returned);
@@ -451,16 +512,14 @@ export default function MapView() {
           src?.setData({ type: "FeatureCollection", features: feats });
         })
         .catch((e) => {
-          if ((e as Error).name !== "AbortError") {
-            setMapToast(`Hotspots unavailable: ${(e as Error).message}`);
-          }
+          if ((e as Error).name !== "AbortError") setMapToast(`Hotspots unavailable: ${(e as Error).message}`);
         });
     }, 200);
     return () => {
       window.clearTimeout(t);
       ac.abort();
     };
-  }, [snap, grid, aoiId, mapReady, cursorDate, rangeEnd, filters, viewTick, setMapToast]);
+  }, [snap, grid, aoiId, mapReady, gridPeriod.start, gridPeriod.end, filters, viewTick, setMapToast]);
 
   // GIBS overlay
   useEffect(() => {
@@ -482,7 +541,10 @@ export default function MapView() {
         maxzoom: 9,
         attribution: "NASA GIBS",
       });
-      map.addLayer({ id: layerId, type: "raster", source: "gibs", paint: { "raster-opacity": 0.85 } });
+      map.addLayer(
+        { id: layerId, type: "raster", source: "gibs", paint: { "raster-opacity": 0.45 } },
+        "aoi-fill",
+      );
     } else if (map.getLayer(layerId)) {
       map.removeLayer(layerId);
       map.removeSource("gibs");
@@ -525,7 +587,7 @@ export default function MapView() {
         useStore.getState().setAois(list);
         useStore.getState().setAoiId(created.id);
         setMapToast(`AOI "${created.id}" created — harmonization started.`);
-        void pollUntilReady(created.id);
+        void pollUntilReady(created.id, created.job_id);
       } catch (e) {
         setMapToast(`AOI creation failed: ${(e as Error).message}`);
       }
@@ -533,21 +595,37 @@ export default function MapView() {
     [setMapToast],
   );
 
-  async function pollUntilReady(id: string) {
+  async function pollUntilReady(id: string, jobId?: string | null) {
     for (let i = 0; i < 240; i++) {
       await new Promise((r) => setTimeout(r, 1000));
-      if (useStore.getState().aoiId !== id) return;
       try {
-        await api.calendar(id);
-        // A freshly built AOI must not serve a stale calendar slice.
-        clearCalendarCache();
-        useStore.getState().setMapToast(`AOI ${id} ready — harmonized series built.`);
-        return;
+        const current = await api.getAoi(id);
+        const activeJobId = jobId ?? current.job_id;
+        if (!activeJobId) continue;
+        const job = await api.job(activeJobId);
+        if (job.status === "DONE" || job.status === "FAILED") {
+          useStore.getState().setAois(await api.listAois());
+          clearCalendarCache();
+          useStore.getState().bumpDataRevision();
+          useStore.getState().setMapToast(job.status === "DONE"
+            ? `AOI ${id} ready — harmonized series built.`
+            : `AOI ${id} build failed: ${job.message || "check the server job log"}`);
+          return;
+        }
       } catch {
-        continue;
+        // The AOI may not be visible until its creation transaction commits.
       }
     }
+    useStore.getState().setMapToast(`AOI ${id} is still processing; refresh the area list shortly.`);
   }
+
+  const finishPolygon = useCallback(async () => {
+    if (drawPts.current.length < 3) return;
+    const ring = [...drawPts.current, drawPts.current[0]];
+    setDrawMode("off");
+    (mapRef.current?.getSource("draw") as maplibregl.GeoJSONSource | undefined)?.setData(EMPTY_FC);
+    await createAoiFromRing(ring);
+  }, [createAoiFromRing, setDrawMode]);
 
   // Shift-drag bbox drawing
   useEffect(() => {
@@ -556,7 +634,7 @@ export default function MapView() {
     let start: [number, number] | null = null;
 
     const onDown = (e: maplibregl.MapMouseEvent) => {
-      if (!e.originalEvent.shiftKey) return;
+      if (drawModeRef.current === "polygon" || !e.originalEvent.shiftKey) return;
       e.preventDefault();
       start = [e.lngLat.lng, e.lngLat.lat];
       map.dragPan.disable();
@@ -591,37 +669,44 @@ export default function MapView() {
 
   // Polygon drawing via click points
   useEffect(() => {
-    const onKey = async (e: KeyboardEvent) => {
+      const onKey = async (e: KeyboardEvent) => {
+        if (drawModeRef.current !== "polygon") return;
+        const target = e.target;
+      if (target instanceof HTMLElement && target.closest("input, textarea, select")) return;
       if (e.key === "Escape") {
+        e.preventDefault();
         setDrawMode("off");
         (mapRef.current?.getSource("draw") as maplibregl.GeoJSONSource | undefined)?.setData(EMPTY_FC);
       }
-      if (e.key === "Enter" && drawModeRef.current === "polygon" && drawPts.current.length >= 3) {
-        const ring = [...drawPts.current, drawPts.current[0]];
-        setDrawMode("off");
-        (mapRef.current?.getSource("draw") as maplibregl.GeoJSONSource | undefined)?.setData(EMPTY_FC);
-        await createAoiFromRing(ring);
+      if (e.key === "Enter" && drawPts.current.length >= 3) {
+        if (target instanceof HTMLElement && target.closest("button")) return;
+        e.preventDefault();
+        await finishPolygon();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [createAoiFromRing, setDrawMode]);
+  }, [finishPolygon, setDrawMode]);
 
   const onMapClick = useCallback(
     (e: maplibregl.MapMouseEvent) => {
       if (drawModeRef.current !== "polygon") return;
       drawPts.current.push([Number(e.lngLat.lng.toFixed(4)), Number(e.lngLat.lat.toFixed(4))]);
       const pts = drawPts.current;
-      if (pts.length >= 2) {
-        (mapRef.current?.getSource("draw") as maplibregl.GeoJSONSource | undefined)?.setData({
+      setDrawPointCount(pts.length);
+      const geometry: GeoJSON.Geometry | null = pts.length >= 3
+        ? { type: "Polygon", coordinates: [[...pts, pts[0]]] }
+        : pts.length === 2 ? { type: "LineString", coordinates: pts } : null;
+      (mapRef.current?.getSource("draw") as maplibregl.GeoJSONSource | undefined)?.setData(
+        geometry ? {
           type: "FeatureCollection",
           features: [{
             type: "Feature",
-            geometry: { type: "Polygon", coordinates: [[...pts, pts[0]]] },
+            geometry,
             properties: {},
           }],
-        });
-      }
+        } : EMPTY_FC,
+      );
     },
     [],
   );
@@ -636,15 +721,15 @@ export default function MapView() {
   const day = cursorDate ?? rangeEnd;
 
   const windowTotal = useMemo(
-    () => (snap ? countInWindow(snap, wStart, wEnd) : grid ? rawTotal : 0),
-    [snap, grid, rawTotal, wStart, wEnd],
+    () => (snap ? countInWindow(snap, wStart, wEnd) : grid ? grid.meta.total_points : 0),
+    [snap, grid, wStart, wEnd],
   );
   const dayCount = useMemo(() => {
     if (snap) {
       return featuresForDay(snap, day, filters.hideStaticSources).length;
     }
-    return rawFeat.length;
-  }, [snap, rawFeat, day, filters.hideStaticSources]);
+    return rawTotal;
+  }, [snap, rawTotal, day, filters.hideStaticSources]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-basalt">
@@ -652,12 +737,21 @@ export default function MapView() {
       <div ref={containerRef} className="h-full w-full" />
 
       {/* ── Top-Left Floating GIS HUD ── */}
-      <div className="glass-hud absolute left-4 top-4 z-10 flex flex-col gap-2 rounded-2xl p-3 text-xs text-pewter shadow-2xl min-w-[200px]">
+      <div className="glass-hud absolute left-4 top-4 z-10 flex min-w-[200px] flex-col gap-2 rounded-2xl p-3 text-xs text-pewter shadow-2xl max-sm:left-2 max-sm:top-2 max-sm:min-w-0 max-sm:max-w-[45vw] max-sm:p-2">
         {/* Draw status banner (only visible when drawing polygon) */}
         {drawModeRef.current === "polygon" && (
-          <div className="rounded-lg bg-terra/20 border border-terra px-2.5 py-1.5 font-mono text-[10px] font-bold text-alabaster tracking-wider animate-pulse flex items-center justify-between">
-            <span>DRAWING AOI</span>
-            <span className="text-muted font-normal">ENTER/ESC</span>
+          <div className="rounded-lg border border-terra bg-terra/20 px-2.5 py-1.5 font-mono text-[10px] font-bold tracking-wider text-alabaster">
+            <div className="flex items-center justify-between gap-2">
+              <span>DRAWING AOI · {drawPointCount} POINTS</span>
+              <button type="button" onClick={() => {
+                setDrawMode("off");
+                (mapRef.current?.getSource("draw") as maplibregl.GeoJSONSource | undefined)?.setData(EMPTY_FC);
+              }} className="rounded px-1 text-muted hover:bg-coral/10 hover:text-coral" aria-label="Cancel AOI drawing">Cancel</button>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-2 font-normal text-muted">
+              <span>Click 3+ vertices · Enter to finish</span>
+              <button type="button" disabled={drawPointCount < 3} onClick={() => void finishPolygon()} className="rounded bg-terra px-1.5 py-0.5 font-bold text-alabaster disabled:opacity-40" aria-label="Finish AOI drawing">Finish</button>
+            </div>
           </div>
         )}
 
@@ -666,6 +760,8 @@ export default function MapView() {
           <button
             type="button"
             onClick={() => setShowHeat(!showHeat)}
+            aria-pressed={showHeat}
+            title="Toggle density heatmap (individual point clicks are disabled while active)"
             className={`flex items-center justify-between gap-2.5 rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition border ${
               showHeat
                 ? "bg-terra/15 border-terra text-alabaster shadow-sm"
@@ -679,6 +775,8 @@ export default function MapView() {
           <button
             type="button"
             onClick={() => setShowGibs(!showGibs)}
+            aria-pressed={showGibs}
+            title="Toggle the NASA GIBS thermal-anomaly overlay for the selected date"
             className={`flex items-center justify-between gap-2.5 rounded-lg px-2.5 py-1.5 text-[10px] font-medium transition border ${
               showGibs
                 ? "bg-amber/15 border-amber text-alabaster shadow-sm"
@@ -691,20 +789,22 @@ export default function MapView() {
         </div>
 
         {/* Grid resolution switch (if active) */}
-        {!snap && (
+        {snapRedirect && !snap && (
           <div className="flex items-center gap-2 border-t border-white/5 pt-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-muted font-mono">GRID</span>
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted font-mono">Grid period</span>
             {(["week", "month"] as const).map((r) => (
               <button
                 key={r}
                 onClick={() => setGridRes(r)}
+                aria-pressed={gridRes === r}
                 className={`rounded px-2 py-0.5 text-[10px] font-semibold uppercase ${
                   gridRes === r ? "bg-terra text-alabaster" : "bg-basalt-200 text-pewter hover:text-alabaster"
                 }`}
               >
-                {r}
+                {r === "week" ? "Week" : "Month"}
               </button>
             ))}
+            <span className="font-mono text-[9px] text-pewter" aria-live="polite">{gridPeriod.bucket}</span>
           </div>
         )}
 
@@ -726,6 +826,20 @@ export default function MapView() {
           ))}
         </div>
 
+        <button
+          type="button"
+          onClick={() => {
+            const selected = aois.find((a) => a.id === aoiId);
+            const map = mapRef.current;
+            if (selected && map) map.fitBounds([[selected.west, selected.south], [selected.east, selected.north]], { padding: 60, duration: 500, maxZoom: 9 });
+          }}
+          disabled={!aois.some((a) => a.id === aoiId)}
+          className="rounded-lg border border-basalt-300 bg-basalt-200 px-2.5 py-1.5 text-left text-[10px] font-semibold text-pewter transition hover:border-terra/60 hover:text-alabaster disabled:opacity-40"
+          aria-label="Reset map to selected AOI bounds"
+        >
+          Reset view to selected AOI
+        </button>
+
         {/* Sensor Legend */}
         <div className="flex items-center justify-between border-t border-white/5 pt-2 text-[10px] font-mono">
           <div className="flex items-center gap-1.5">
@@ -740,7 +854,7 @@ export default function MapView() {
       </div>
 
       {/* ── Top-Right Telemetry HUD ── */}
-      <div className="glass-hud absolute right-4 top-4 z-10 rounded-2xl p-4 text-right shadow-2xl min-w-[220px]">
+      <div className="glass-hud absolute right-4 top-4 z-10 min-w-[220px] rounded-2xl p-4 text-right shadow-2xl max-sm:right-2 max-sm:top-2 max-sm:min-w-0 max-sm:max-w-[45vw] max-sm:p-2">
         <div className="flex items-center justify-between gap-3 mb-1">
           <span className="text-[9px] font-bold tracking-widest text-muted uppercase font-mono">Telemetry Date</span>
           {playing && (
@@ -755,18 +869,19 @@ export default function MapView() {
         <div className="font-mono text-base font-bold text-alabaster tracking-tight">
           {prettyDate(day)}
         </div>
+        {!snap && grid && <div className="mt-0.5 font-mono text-[9px] text-amber">Selected grid: {gridPeriod.bucket}</div>}
 
         {/* Detections count stats */}
         <div className="mt-2.5 pt-2.5 border-t border-white/10 flex flex-col gap-1 text-xs">
           <div className="flex items-center justify-between gap-4">
-            <span className="text-[10px] text-muted">Day Detections:</span>
+            <span className="text-[10px] text-muted">{snap ? "Day detections (AOI):" : "Period detections (viewport):"}</span>
             <span className="font-mono font-bold text-terra">
               {dayCount.toLocaleString()}
-              {rawTruncated && <span className="text-[9px] text-amber font-normal"> (capped)</span>}
+              {rawTruncated && <span className="text-[9px] font-normal text-amber"> ({rawFeat.length.toLocaleString()} shown)</span>}
             </span>
           </div>
           <div className="flex items-center justify-between gap-4">
-            <span className="text-[10px] text-muted">Window Total:</span>
+            <span className="text-[10px] text-muted">{snap ? "120-day window:" : "Selected-period total:"}</span>
             <span className="font-mono font-bold text-alabaster">{windowTotal.toLocaleString()}</span>
           </div>
         </div>
@@ -789,15 +904,6 @@ export default function MapView() {
         </button>
       )}
 
-      {/* Toast Notification */}
-      {mapToast && (
-        <button
-          onClick={() => setMapToast(null)}
-          className="glass-hud absolute bottom-20 left-1/2 z-20 max-w-[80%] -translate-x-1/2 truncate rounded-xl px-5 py-2.5 text-xs text-alabaster shadow-2xl backdrop-blur font-medium"
-        >
-          {mapToast} <span className="ml-2 text-muted">(Click to dismiss)</span>
-        </button>
-      )}
     </div>
   );
 }

@@ -25,6 +25,9 @@ export function calendarCacheKey(
   aoiId: string,
   yearFilter: string,
   filters: CalendarFilterState,
+  rangeStart = "",
+  rangeEnd = "",
+  dataRevision = 0,
 ): string {
   return [
     aoiId,
@@ -34,6 +37,9 @@ export function calendarCacheKey(
     filters.daynight,
     filters.minFrp ?? "",
     filters.hideStaticSources ? "static-off" : "static-on",
+    rangeStart,
+    rangeEnd,
+    dataRevision,
   ].join("|");
 }
 

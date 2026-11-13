@@ -210,6 +210,7 @@ def create_aoi(
         id=aoi.id, name=aoi.name, description=aoi.description,
         geojson=json.loads(aoi.geojson), west=aoi.west, south=aoi.south,
         east=aoi.east, north=aoi.north, is_preset=aoi.is_preset, created_at=aoi.created_at,
+        has_data=False, job_id=job.id,
     )
 
 
@@ -221,11 +222,17 @@ def get_aoi(aoi_id: str, db: Session = Depends(get_db)) -> AoiOut:
     has_data = db.execute(
         select(HarmonizedDaily.aoi_id).where(HarmonizedDaily.aoi_id == aoi_id).limit(1)
     ).scalar_one_or_none() is not None
+    latest_job = db.execute(
+        select(AggregationJob)
+        .where(AggregationJob.aoi_id == aoi_id)
+        .order_by(AggregationJob.started_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
     return AoiOut(
         id=a.id, name=a.name, description=a.description,
         geojson=json.loads(a.geojson), west=a.west, south=a.south,
         east=a.east, north=a.north, is_preset=a.is_preset, created_at=a.created_at,
-        has_data=has_data,
+        has_data=has_data, job_id=latest_job.id if latest_job else None,
     )
 
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import type { MethodsResponse } from "../api/types";
@@ -11,24 +11,41 @@ export default function MethodsModal() {
   const aoiId = useStore((s) => s.aoiId);
   const meta = useStore((s) => s.meta);
   const [methods, setMethods] = useState<MethodsResponse | null>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (open && aoiId) {
-      api.methods(aoiId).then(setMethods).catch(() => setMethods(null));
+    if (!open) {
+      setMethods(null);
+      return;
     }
+    let alive = true;
+    setMethods(null);
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    if (aoiId) api.methods(aoiId).then((data) => alive && setMethods(data)).catch(() => alive && setMethods(null));
+    return () => {
+      alive = false;
+      window.removeEventListener("keydown", onKey);
+      previousFocus?.focus();
+    };
   }, [open, aoiId]);
 
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-2 backdrop-blur-sm sm:p-4"
       onClick={() => setOpen(false)}
-      role="dialog"
-      aria-modal="true"
     >
       <div
-        className="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-basalt-300 bg-basalt-100 p-6 shadow-2xl text-alabaster"
+        className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-basalt-300 bg-basalt-100 p-4 text-alabaster shadow-2xl sm:max-h-[85vh] sm:p-6"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="methods-modal-title"
       >
         <div className="mb-5 flex items-center justify-between border-b border-basalt-300 pb-3">
           <div className="flex items-center gap-3.5">
@@ -39,8 +56,8 @@ export default function MethodsModal() {
             />
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="font-display text-lg font-bold text-alabaster tracking-wide">
-                  EmberEye — Gaia Saviors
+                <h2 id="methods-modal-title" className="font-display text-lg font-bold text-alabaster tracking-wide">
+                  Methodology &amp; Data Sources
                 </h2>
                 <span className="rounded bg-terra/20 px-2 py-0.5 text-[10px] font-bold text-terra">
                   NASA Space Apps 2026
@@ -52,7 +69,10 @@ export default function MethodsModal() {
             </div>
           </div>
           <button
+            ref={closeRef}
+            type="button"
             onClick={() => setOpen(false)}
+            aria-label="Close methodology dialog"
             className="rounded-lg border border-basalt-300 bg-basalt-200 px-3 py-1 text-xs font-semibold text-pewter hover:border-basalt-400 hover:text-alabaster transition-colors"
           >
             ✕ CLOSE

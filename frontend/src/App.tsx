@@ -20,6 +20,8 @@ export default function App() {
   const setAois = useStore((s) => s.setAois);
   const setAoiId = useStore((s) => s.setAoiId);
   const initRangeFromRecord = useStore((s) => s.initRangeFromRecord);
+  const mapToast = useStore((s) => s.mapToast);
+  const setMapToast = useStore((s) => s.setMapToast);
 
   useEffect(() => {
     let alive = true;
@@ -91,6 +93,19 @@ export default function App() {
           {aoiId && (view === "map" ? <TimelineScrubber /> : <DateRangeBar />)}
         </main>
         <MethodsModal />
+        {mapToast && (
+          <button
+            type="button"
+            role="status"
+            aria-live="polite"
+            onClick={() => setMapToast(null)}
+            className="fixed bottom-20 left-1/2 z-[60] flex max-w-[92vw] -translate-x-1/2 items-center gap-3 rounded-xl border border-basalt-400 bg-basalt-100/95 px-4 py-2.5 text-left text-xs text-alabaster shadow-2xl backdrop-blur sm:max-w-xl"
+            title="Dismiss notification"
+          >
+            <span className="min-w-0 truncate">{mapToast}</span>
+            <span aria-hidden className="shrink-0 text-muted">×</span>
+          </button>
+        )}
       </div>
     </ErrorBoundary>
   );

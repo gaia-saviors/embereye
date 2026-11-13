@@ -12,7 +12,7 @@ import type {
 } from "../api/types";
 import { useStore } from "../store";
 import { SENSOR_COLOR } from "../lib/colors";
-import { fmtInt, fmtNum } from "../lib/format";
+import { addDays, fmtInt, fmtNum } from "../lib/format";
 
 const STATIC_COLOR = "#A78BFA"; // persistent-source layer
 const NIGHT_COLOR = "#475E77";  // non-static night layer
@@ -25,6 +25,9 @@ export default function AnalyticsView() {
   const aoiId = useStore((s) => s.aoiId);
   const rangeStart = useStore((s) => s.rangeStart);
   const rangeEnd = useStore((s) => s.rangeEnd);
+  const setRange = useStore((s) => s.setRange);
+  const dataRevision = useStore((s) => s.dataRevision);
+  const filters = useStore((s) => s.filters);
   const includeLayers = useStore((s) => s.includeLayers);
   const setIncludeLayers = useStore((s) => s.setIncludeLayers);
   const setCursorDate = useStore((s) => s.setCursorDate);
@@ -43,6 +46,10 @@ export default function AnalyticsView() {
   useEffect(() => {
     if (!aoiId) return;
     let alive = true;
+    setClim(null);
+    setSeasons(null);
+    setEpisodes(null);
+    setError(null);
     Promise.all([
       api.climatology(aoiId),
       api.seasons(aoiId),
@@ -58,12 +65,15 @@ export default function AnalyticsView() {
     return () => {
       alive = false;
     };
-  }, [aoiId]);
+  }, [aoiId, dataRevision]);
 
   useEffect(() => {
     if (!aoiId) return;
     let alive = true;
     setError(null);
+    setSummary(null);
+    setHeadline(null);
+    setSeries(null);
     Promise.all([
       api.summary(aoiId, undefined, undefined, includeLayers),
       api.headline(aoiId),
@@ -79,7 +89,7 @@ export default function AnalyticsView() {
     return () => {
       alive = false;
     };
-  }, [aoiId, rangeStart, rangeEnd, res, includeLayers]);
+  }, [aoiId, rangeStart, rangeEnd, res, includeLayers, dataRevision]);
 
   if (!aoiId) return <Centered>Select an area of interest.</Centered>;
   if (error) {
@@ -109,11 +119,23 @@ export default function AnalyticsView() {
     );
   }
   if (!summary || !series || !clim || !seasons || !episodes || !headline) {
-    return <Centered spinner>Harmonizing multi-decadal analytics...</Centered>;
+    return (
+      <Centered spinner>
+        <div>
+          <div>Loading multi-decadal analytics…</div>
+          <p className="mt-1 max-w-sm text-xs text-muted">
+            First load reads several large archive summaries and may take a few seconds.
+          </p>
+        </div>
+      </Centered>
+    );
   }
 
   return (
     <div className="h-full overflow-y-auto bg-basalt p-5 flex flex-col gap-5">
+      <div role="note" className="rounded-xl border border-amber/30 bg-amber/5 px-4 py-2.5 text-[11px] leading-relaxed text-pewter">
+        <span className="font-semibold text-amber">Scope:</span> the date range applies to this time-series chart only. Ribbon filters apply to Map and Calendar; headline KPIs, climatology, seasons, and episode rankings use the stored aggregate series.
+      </div>
       {/* ── Headline Analytic Banner ── */}
       <section className="rounded-2xl border border-terra/40 bg-basalt-100 p-4 shadow-md">
         {headline.complete_month ? (
@@ -130,6 +152,7 @@ export default function AnalyticsView() {
               <button
                 type="button"
                 onClick={() => setIncludeLayers(!includeLayers)}
+                aria-pressed={includeLayers}
                 className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-medium transition border ${
                   includeLayers
                     ? "bg-terra/15 border-terra text-alabaster shadow-sm"
@@ -269,6 +292,7 @@ export default function AnalyticsView() {
                 <button
                   key={r}
                   onClick={() => setRes(r)}
+                  aria-pressed={res === r}
                   className={res === r ? "active" : ""}
                 >
                   {r.toUpperCase()}
@@ -300,8 +324,8 @@ export default function AnalyticsView() {
           <div className="mt-2 text-[10px] text-muted">
             Transferred era bars (2000–2011) reflect scaled MODIS estimates; VIIRS era bars (2012+) reflect direct observations.
           </div>
-          <div className="mt-3 max-h-36 overflow-y-auto text-xs">
-            <table className="w-full text-left">
+          <div className="mt-3 max-h-36 overflow-auto text-xs">
+            <table className="min-w-[540px] w-full text-left">
               <thead className="sticky top-0 bg-basalt-100 text-muted font-mono text-[10px]">
                 <tr>
                   <th className="py-1 pr-2">Year</th>
@@ -335,10 +359,10 @@ export default function AnalyticsView() {
       {/* ── Significant Fire Episodes ── */}
       <section className="rounded-2xl border border-basalt-300 bg-basalt-100 p-4 shadow-md">
         <h3 className="mb-3 font-display text-xs font-bold tracking-wide text-alabaster uppercase border-b border-basalt-300 pb-2">
-          Significant Burning Episodes — Ranked by Severity ({episodes.length} identified)
+          Significant Burning Episodes — Ranked by Severity ({episodes.length} shown)
         </h3>
-        <div className="max-h-72 overflow-y-auto">
-          <table className="w-full text-left text-xs">
+        <div className="max-h-72 overflow-auto">
+          <table className="min-w-[760px] w-full text-left text-xs">
             <thead className="sticky top-0 bg-basalt-100 text-muted font-mono text-[10px]">
               <tr>
                 <th className="py-1.5 pr-3">Episode</th>
@@ -369,9 +393,11 @@ export default function AnalyticsView() {
                   <td className="py-2 text-right">
                     <button
                       onClick={() => {
+                        setRange(e.start_date, addDays(e.start_date, Math.max(0, e.duration_days - 1)));
                         setCursorDate(e.start_date);
                         setView("map");
                       }}
+                      aria-label={`View episode ${e.label} on the map`}
                       className="rounded-lg border border-basalt-300 bg-basalt-200 px-2 py-1 text-[10px] font-bold text-pewter hover:border-terra hover:text-terra transition-colors"
                     >
                       VIEW MAP →
@@ -399,7 +425,16 @@ export default function AnalyticsView() {
         ].map(([level, format]) => (
           <a
             key={`${level}-${format}`}
-            href={api.exportUrl({ aoi: aoiId, level, format })}
+            href={api.exportUrl({
+              aoi: aoiId, level, format, start: rangeStart, end: rangeEnd,
+              ...(level === "hotspots" ? {
+                sensor: filters.sensor,
+                confidence: filters.confidence,
+                daynight: filters.daynight,
+                min_frp: filters.minFrp ?? undefined,
+                hide_static: filters.hideStaticSources,
+              } : {}),
+            })}
             className="rounded-lg border border-basalt-300 bg-basalt-200 px-3 py-1.5 font-mono text-[11px] font-semibold text-pewter hover:border-terra hover:text-terra transition-colors"
           >
             {level.toUpperCase()} · {format.toUpperCase()}

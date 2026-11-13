@@ -151,6 +151,13 @@ class TestGridAndBbox:
             "/api/hotspots/grid?aoi=punjab-india&res=month&start=2020-01-01&end=2020-12-31")
         assert rb.json()["meta"]["total_points"] <= ra.json()["meta"]["total_points"]
 
+    def test_grid_hide_static_filter(self, client):
+        all_rows = client.get("/api/hotspots/grid?aoi=punjab-india&res=month").json()
+        filtered = client.get(
+            "/api/hotspots/grid?aoi=punjab-india&res=month&hide_static=true").json()
+        assert filtered["meta"]["total_points"] <= all_rows["meta"]["total_points"]
+        assert all(cell["n_static"] == 0 for cell in filtered["cells"])
+
     def test_hotspots_bbox_overrides_spatial_filter(self, client):
         # a tiny bbox far from the AOI must return zero rows, honestly
         r = client.get(
@@ -163,6 +170,15 @@ class TestGridAndBbox:
         body = r2.json()
         assert body["meta"]["returned"] <= 5
         assert body["meta"]["total"] >= body["meta"]["returned"]
+
+    def test_hotspots_bbox_hide_static_filters_rows_and_total(self, client):
+        params = "aoi=punjab-india&bbox=70,25,80,35&limit=20000"
+        all_rows = client.get(f"/api/hotspots?{params}").json()
+        filtered = client.get(f"/api/hotspots?{params}&hide_static=true").json()
+        assert filtered["meta"]["total"] <= all_rows["meta"]["total"]
+        assert all(not feature["properties"]["static_source"] for feature in filtered["features"])
+        assert filtered["meta"]["returned"] == len(filtered["features"])
+        assert filtered["meta"]["total"] >= filtered["meta"]["returned"]
 
     def test_hotspots_limit_capped_at_20000(self, client):
         r = client.get("/api/hotspots?aoi=punjab-india&limit=200000")

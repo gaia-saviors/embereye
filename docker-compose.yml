@@ -15,6 +15,7 @@
 name: embereye
 
 x-backend-common: &backend-common
+  image: ghcr.io/3lyly0/embereye-backend:${EMBEREYE_IMAGE_TAG:-latest}
   build:
     context: ./backend
     dockerfile: Dockerfile
@@ -93,6 +94,7 @@ services:
       start_period: 15s
 
   frontend:
+    image: ghcr.io/3lyly0/embereye-frontend:${EMBEREYE_IMAGE_TAG:-latest}
     build:
       context: ./frontend
       dockerfile: Dockerfile

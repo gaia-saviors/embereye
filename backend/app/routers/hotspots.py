@@ -120,6 +120,7 @@ def hotspots(
     confidence: str = Query("all", pattern="^(all|LOW|NOMINAL|HIGH)$"),
     daynight: str = Query("all", pattern="^(all|D|N)$"),
     min_frp: float | None = Query(None, ge=0),
+    hide_static: bool = Query(False),
     limit: int = Query(5000, ge=1, le=20000),
     offset: int = Query(0, ge=0),
     # v1.0.6: viewport-bounded raw fetch for the grid path (zoomed-in map
@@ -148,10 +149,14 @@ def hotspots(
         select(func.count()).select_from(Hotspot), a, start, end, sensor,
         satellite, confidence, daynight, min_frp,
     )
+    if hide_static:
+        total_stmt = total_stmt.where(Hotspot.static_source.is_(False))
     total = int(db.scalar(total_stmt) or 0)
 
     stmt = _apply_common(select(Hotspot), a, start, end, sensor, satellite,
                          confidence, daynight, min_frp)
+    if hide_static:
+        stmt = stmt.where(Hotspot.static_source.is_(False))
     if a.is_preset:
         stmt = stmt.order_by(Hotspot.local_date, Hotspot.id).offset(offset).limit(limit)
         window = db.execute(stmt).scalars().all()
@@ -427,6 +432,7 @@ def hotspots_grid(
     confidence: str = Query("all", pattern="^(all|LOW|NOMINAL|HIGH)$"),
     daynight: str = Query("all", pattern="^(all|D|N)$"),
     min_frp: float | None = Query(None, ge=0),
+    hide_static: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """Aggregated overview: grid cells x week|month, aggregated server-side.
@@ -462,6 +468,8 @@ def hotspots_grid(
         conds.append(Hotspot.daynight == daynight)
     if min_frp is not None:
         conds.append(Hotspot.frp_mw >= min_frp)
+    if hide_static:
+        conds.append(Hotspot.static_source.is_(False))
 
     rows = db.execute(
         select(

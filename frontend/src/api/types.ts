@@ -136,8 +136,9 @@ export interface Aoi {
   is_preset: boolean;
   created_at: string;
   // Phase 3A (defect 7): false = no data loaded for this AOI in the current
-  // database; the UI disables it ("no data loaded in this version").
+  // loaded database; the UI disables it ("no data loaded in this version").
   has_data: boolean;
+  job_id?: string | null;
 }
 
 export interface JobOut {
@@ -322,6 +323,9 @@ export interface HeadlineResponse {
   complete_percentile_rank: number | null;
   complete_verdict: string | null;
   complete_note: string;
+  provisional?: boolean;
+  nrt_share_complete?: number | null;
+  provisional_note?: string | null;
 }
 
 export interface TimeseriesPoint {

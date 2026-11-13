@@ -16,6 +16,7 @@ for 2000–2026.
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
 [![React 18](https://img.shields.io/badge/React-18-61DAFB.svg)](https://react.dev/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com/)
+[![GHCR](https://img.shields.io/badge/container-GHCR-2496ED.svg)](https://github.com/users/3lyly0/packages/container/package/embereye-backend)
 
 **NASA Space Apps Challenge 2026** · Cairo, Egypt  
 **Team:** Gaia Saviors · **Challenge:** *Harmonization of MODIS and VIIRS Hot Spots*
@@ -246,7 +247,7 @@ embereye/
 ├── tests/                   # pytest suite (pipeline, phase 2, v1.06/v1.07)
 ├── docs/                    # methodology, ADRs, data provenance, audit, backup
 ├── assets/                  # brand assets
-├── .github/workflows/ci.yml # backend tests · frontend build · Docker smoke test
+├── .github/workflows/       # CI tests/build · tag-triggered GHCR publish
 ├── docker-compose.yml       # PostgreSQL + seeder + backend + nginx SPA
 ├── docker-compose.sqlite.yml# override: serve a host SQLite archive
 ├── Makefile · .env.example · LICENSE · CITATION.cff
@@ -265,7 +266,35 @@ Dockerfiles, CI caches, and relative imports.
 Docker Desktop (recommended), or Python **3.11** + Node **20** for a local run.
 No API key is required: the stack starts on the labelled seed archive.
 
-### Option A — Full stack with Docker Compose (recommended)
+### Quick start — Pull published GHCR images
+
+The release workflow publishes multi-architecture backend and frontend images
+to GHCR on stable version tags. This repository and its packages are private, so
+users need repository access and a classic GitHub PAT with `read:packages` to
+pull the images. Run the commands below from the root of a clone of this repo;
+`docker login` prompts for the PAT as the password.
+
+```bash
+git clone https://github.com/3lyly0/embereye-spaceapps.git
+cd embereye-spaceapps
+cp .env.example .env
+# Optional: pin an exact release; omit to use the latest published tag.
+echo 'EMBEREYE_IMAGE_TAG=v1.0.9' >> .env
+docker login ghcr.io -u 3lyly0
+docker compose pull
+docker compose up -d --no-build
+
+# Web app:      http://localhost:8080
+# API docs:     http://localhost:8000/docs
+# Health:       http://localhost:8000/api/health
+```
+
+With no `FIRMS_MAP_KEY`, the one-shot seeder creates the labelled deterministic
+synthetic demo archive. The UI marks it as synthetic; it is not NASA observations.
+To run the Nile Delta real-data snapshot instead, use the SQLite archive option
+below with the same prebuilt images.
+
+### Option A — Build the full stack from source
 
 ```bash
 git clone https://github.com/3lyly0/embereye-spaceapps.git
@@ -301,10 +330,12 @@ derived tables were rebuilt from the stored hotspots; see
 [`docs/AUDIT_REAL.md`](docs/AUDIT_REAL.md) for the snapshot-specific metrics.
 
 
-If you already ran `scripts/backfill_firms.py` and have `embereye_dev.db`:
+If you already ran `scripts/backfill_firms.py` and have `embereye_dev.db`, use
+the GHCR images with `--no-build`:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up --build
+docker compose -f docker-compose.yml -f docker-compose.sqlite.yml pull
+docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up -d --no-build
 ```
 
 This mounts the file read-write, disables the seeder, and switches SQLite to
@@ -418,7 +449,7 @@ If you use EmberEye, please cite the repository using
   author  = {{Team Gaia Saviors}},
   title   = {EmberEye: Harmonization of MODIS and VIIRS Hot Spots},
   year    = {2026},
-  version = {1.0.8},
+  version = {1.0.9},
   license = {MIT},
   url     = {https://github.com/3lyly0/embereye-spaceapps}
 }

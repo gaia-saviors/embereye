@@ -194,7 +194,8 @@ def export(
     satellite: str | None = Query(None),
     confidence: str = Query("all", pattern="^(all|LOW|NOMINAL|HIGH)$"),
     daynight: str = Query("all", pattern="^(all|D|N)$"),
-    min_frp: float | None = Query(None),
+    min_frp: float | None = None,
+    hide_static: bool = False,
     db: Session = Depends(get_db),
 ):
     a = db.get(Aoi, aoi)
@@ -216,6 +217,8 @@ def export(
         ]
         stmt = select(*cols)
         stmt = _apply_common(stmt, a, eff_start, eff_end, sensor, satellite, confidence, daynight, min_frp)
+        if hide_static:
+            stmt = stmt.where(Hotspot.static_source.is_(False))
         stmt = stmt.order_by(Hotspot.local_date, Hotspot.id).limit(500_000)
 
         if format == "geojson":
