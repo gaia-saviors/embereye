@@ -356,7 +356,7 @@ export default function CalendarView() {
           </h3>
           <p className="mb-5 text-xs leading-relaxed text-pewter">
             {isNoData
-              ? "This local deployment serves the verified 26-year NASA FIRMS archive for Nile Delta, Egypt (171,853 hotspots). Other preset archives can be populated via synthetic demo data or raw CSV archives."
+              ? "The v1.0.8 offline database includes a verified NASA FIRMS archive for Nile Delta, Egypt. Other preset regions in that snapshot use synthetic demo records; custom regions use loaded observations that fall inside their polygon."
               : error}
           </p>
           <button

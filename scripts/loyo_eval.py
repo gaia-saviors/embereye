@@ -1,13 +1,12 @@
-"""LOYO prediction error + 95% prediction interval, COMPUTED at three
-aggregation levels (annual / calendar-month / ISO-week). Handoff P2a.
+"""Recompute LOYO prediction error + 95% prediction interval at three
+aggregation levels (annual / calendar-month / ISO-week) for the selected data.
 
-Reconciles the conflicting numbers quoted in the 2026-11-02 handoff:
-  * "~18-24% monthly MAPE, +-35-40% PI with no computation behind it"
-  * "two different annual PIs (-18.1/+12.2 vs -14.3/+17.8)"
-  * "MAPE 7.08% vs 7.5%"
-by printing, from one reproducible run: the annual LOYO for BOTH platform
-variants (pooled and per-platform - the source of the two different annual
-PIs), plus the monthly and weekly LOYO AT those aggregation levels.
+This is the reproducible source for the metrics of the database snapshot
+passed with --sqlite. Historical audit figures remain in docs/AUDIT_REAL.md
+with their snapshot/date; do not assume they apply to a different database or
+code revision. The report prints annual LOYO for BOTH platform variants
+(pooled and per-platform), plus monthly and weekly LOYO at those aggregation
+levels.
 
 Inputs (exactly one):
   --monthly-csv PATH   the aggregate export (satellite,year,month,daynight,

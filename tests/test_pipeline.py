@@ -331,7 +331,9 @@ class TestHarmonizeComparable:
         arr = _arrays(rows)
         t = self._transfer()
         cont = {"factor_day": 2.0, "factor_night": 1.5,
-                "factor_lo": 1.8, "factor_hi": 2.2}
+                "factor_day_lo": 1.5, "factor_day_hi": 2.5,
+                "factor_night_lo": 1.0, "factor_night_hi": 3.0,
+                "factor_lo": 1.0, "factor_hi": 3.0}
         ledger = harmonize_comparable(
             arr, 20, 31, t, None, viirs_start_ord=20,
             reference_code=2, successor_code=3, snpp_end_ord=25, cont=cont,
@@ -341,9 +343,22 @@ class TestHarmonizeComparable:
         assert ledger["n_harmonized"][i30] == pytest.approx(4.0 / 2.0)
         # night layer: 3 / factor_night (flares are predominantly night rows)
         assert ledger["n_night"][i31] == pytest.approx(3.0 / 1.5)
-        # interval from the factor spread: lo = val / f_hi, hi = val / f_lo
-        assert ledger["n_harmonized_lo"][i30] == pytest.approx(4.0 / 2.2)
-        assert ledger["n_harmonized_hi"][i30] == pytest.approx(4.0 / 1.8)
+        # Comparable daytime counts use the daytime factor bounds, not the
+        # wider night bounds or their legacy generic envelope.
+        assert ledger["n_harmonized_lo"][i30] == pytest.approx(4.0 / 2.5)
+        assert ledger["n_harmonized_hi"][i30] == pytest.approx(4.0 / 1.5)
+
+        # A record with no daytime overlap can still carry a valid night
+        # factor; pass it through rather than silently dropping the night layer.
+        night_only = harmonize_comparable(
+            arr, 20, 31, t, None, viirs_start_ord=20,
+            reference_code=2, successor_code=3, snpp_end_ord=25,
+            cont={"factor_night": 1.5},
+        )
+        i30_night_only = list(night_only["date_ord"]).index(30)
+        i31_night_only = list(night_only["date_ord"]).index(31)
+        assert night_only["n_harmonized"][i30_night_only] == pytest.approx(4.0)
+        assert night_only["n_night"][i31_night_only] == pytest.approx(2.0)
 
     def test_continuity_factors_from_arrays(self):
         from app.harmonize.series import continuity_factors
@@ -357,6 +372,44 @@ class TestHarmonizeComparable:
         assert cont["factor_day"] == pytest.approx(110 / 100, rel=1e-6)
         assert cont["factor_day"] > 1.0
         assert cont["shared_months"] >= 1
+
+    def test_continuity_factors_use_common_months_and_separate_day_night_bounds(self):
+        from app.harmonize.series import continuity_factors
+
+        rows = []
+        for year, day_succ, night_succ in (
+            (2019, (1, 3), (3, 5)),
+            (2020, (2, 4), (4, 6)),
+            (2021, (3, 5), (5, 7)),
+        ):
+            for month, successor_day, successor_night in (
+                (1, day_succ[0], night_succ[0]),
+                (3, day_succ[1], night_succ[1]),
+            ):
+                ordinal = date(year, month, 15).toordinal()
+                rows.extend([(ordinal, 2, 0, 0, 1.0)] * 2)
+                rows.extend([(ordinal, 3, 0, 0, 1.0)] * successor_day)
+                rows.extend([(ordinal, 2, 1, 0, 1.0)] * 2)
+                rows.extend([(ordinal, 3, 1, 0, 1.0)] * successor_night)
+            # Reference-only months must not be counted as platform overlap.
+            feb = date(year, 2, 15).toordinal()
+            april = date(year, 4, 15).toordinal()
+            rows.extend([(feb, 2, 0, 0, 1.0), (feb, 2, 1, 0, 1.0)])
+            rows.append((april, 2, 0, 0, 1.0))
+
+        cont = continuity_factors(_arrays(rows), reference_code=2,
+                                  successor_code=3)
+
+        assert cont["shared_months"] == 6
+        assert cont["shared_months_day"] == 6
+        assert cont["shared_months_night"] == 6
+        assert cont["factor_day"] == pytest.approx(1.5)
+        assert cont["factor_night"] == pytest.approx(2.5)
+        assert cont["factor_day_lo"] == pytest.approx(1.025)
+        assert cont["factor_day_hi"] == pytest.approx(1.975)
+        assert cont["factor_night_lo"] == pytest.approx(2.025)
+        assert cont["factor_night_hi"] == pytest.approx(2.975)
+        assert len(cont["per_month"]["day"]) == 6
 
 
 # --------------------------------------------------------------------------

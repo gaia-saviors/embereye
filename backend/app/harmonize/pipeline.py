@@ -337,12 +337,19 @@ def run_pipeline_for_aoi(
                 params_json=json.dumps({
                     "factor_day": cont.get("factor_day"),
                     "factor_night": cont.get("factor_night"),
+                    "factor_day_lo": cont.get("factor_day_lo"),
+                    "factor_day_hi": cont.get("factor_day_hi"),
+                    "factor_night_lo": cont.get("factor_night_lo"),
+                    "factor_night_hi": cont.get("factor_night_hi"),
                     "factor_lo": cont.get("factor_lo"),
                     "factor_hi": cont.get("factor_hi"),
                     "per_year": cont.get("per_year", {}),
+                    "per_month": cont.get("per_month", {}),
                     "direction": "SNPP_equiv = successor / factor "
                                  "(factor > 1 means successor counts higher)",
                     "shared_months": cont.get("shared_months"),
+                    "shared_months_day": cont.get("shared_months_day"),
+                    "shared_months_night": cont.get("shared_months_night"),
                 }, sort_keys=True),
             ))
     db.flush()
@@ -363,7 +370,8 @@ def run_pipeline_for_aoi(
         transfer, frp_transfer, viirs_start_ord,
         reference_code=2, successor_code=3,
         snpp_end_ord=snpp_end_ord,
-        cont=cont_n20 if cont_n20.get("factor_day") else None,
+        cont=(cont_n20 if cont_n20.get("factor_day")
+              or cont_n20.get("factor_night") else None),
     )
     date_ords = ledger["date_ord"]
     n_h = ledger["n_harmonized"]

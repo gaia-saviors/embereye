@@ -153,13 +153,22 @@ Validation is **leave-one-year-out** (LOYO):
 
 | Metric | Result |
 |---|---|
-| LOYO MAPE | **7.5%** |
-| Mean bias | **+1.6%** |
-| Empirical 95% prediction interval | **[−14.3%, +17.8%]** |
+| Annual LOYO MAPE (pooled, 11 folds) | **7.03%** |
+| Annual mean bias | **−2.01%** |
+| Annual empirical 95% prediction interval | **[−18.15%, +12.21%]** |
+| Per-platform annual LOYO MAPE | **9.25%** |
+| Calendar-month / ISO-week LOYO MAPE | **33.77% / 83.52%** |
 
-The uncertainty interval is carried into `harmonized_daily.n_harmonized_lo/hi`
-and rendered as a band in the UI. A Theil–Sen power-law model is retained as a
-comparison column; it was retired because its LOYO bias was −15% to −23%.
+These are results for the v1.0.8 offline-release snapshot and the Nile Delta
+AOI, not a universal accuracy guarantee. Monthly and weekly intervals are
+much wider than the annual interval; do not quote the annual MAPE as expected
+error for an individual week. The 2026-11-02 audit reported different annual
+figures (7.5%, +1.6%, PI [−14.3%, +17.8%]); both snapshots are documented in
+[`docs/AUDIT_REAL.md`](docs/AUDIT_REAL.md), and the discrepancy is not hidden.
+Aggregation-matched LOYO intervals are carried into
+`harmonized_daily.n_harmonized_lo/hi` and rendered as a band in the UI. A
+Theil–Sen power-law model is retained as a comparison column; it was retired
+because its LOYO bias was −15% to −23%.
 
 ### 4. Intra-VIIRS constellation normalization
 NOAA-20 (2018) and NOAA-21 (2023) are cross-checks, **never summed** with
@@ -275,16 +284,21 @@ once, then exits. Data persists in the `pgdata` volume.
 
 ### Option B — Serve an existing SQLite archive
 
-**Download the ready-to-run archive (no API key needed):**
+**Download the v1.0.8 ready-to-run archive (no API key needed):**
 
 ```bash
-# Download the pre-processed 380MB database to run locally without an API key
-curl -L -o embereye_dev.db "https://github.com/3lyly0/embereye-spaceapps/releases/download/v1.0.0-offline-data/embereye_dev.db"
+# Download the pre-processed ~383MB database to run locally without an API key
+curl -L -o embereye_dev.db "https://github.com/3lyly0/embereye-spaceapps/releases/download/v1.0.8-offline-data/embereye_dev.db"
 ```
 
 > Private-repository note: release assets require an authenticated GitHub
 > session. If `curl` returns 404, run `gh auth login` and use
-> `gh release download v1.0.0-offline-data -R 3lyly0/embereye-spaceapps` instead.
+> `gh release download v1.0.8-offline-data -R 3lyly0/embereye-spaceapps` instead.
+
+This snapshot contains real NASA FIRMS observations for the Nile Delta AOI and
+deterministic synthetic demo records for the other preset AOIs. The v1.0.8
+derived tables were rebuilt from the stored hotspots; see
+[`docs/AUDIT_REAL.md`](docs/AUDIT_REAL.md) for the snapshot-specific metrics.
 
 
 If you already ran `scripts/backfill_firms.py` and have `embereye_dev.db`:
@@ -404,7 +418,7 @@ If you use EmberEye, please cite the repository using
   author  = {{Team Gaia Saviors}},
   title   = {EmberEye: Harmonization of MODIS and VIIRS Hot Spots},
   year    = {2026},
-  version = {1.0.7},
+  version = {1.0.8},
   license = {MIT},
   url     = {https://github.com/3lyly0/embereye-spaceapps}
 }

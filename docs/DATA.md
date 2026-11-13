@@ -26,7 +26,7 @@ What happened (recorded so it never repeats): the v1.0.3 backfill ran without
 the env var, silently created `./embereye_dev.db`, and the whole real archive
 (171,853 rows) landed there while the compose Postgres stayed empty.
 
-## 2. Current real-data status (Ali's machine, 2026-11-02)
+## 2. Historical real-data status (Ali's machine, 2026-11-02)
 
 - Backfill COMPLETE for all 5 satellites (state `MODIS 1900/1900`), database:
   **`embereye_dev.db` (SQLite, ~75.6 MB, repo root)**.
@@ -34,6 +34,24 @@ the env var, silently created `./embereye_dev.db`, and the whole real archive
   (2002-07-07..2026-10-28), SNPP 93,372 (2012-01-20..2026-10-31),
   N20 46,137 (2018-04-01..2026-10-31), N21 18,722 (2023-03-01..2026-10-31).
 - Derived: harmonized_daily 9,496 · daily_aggregates 14,366 · fire_episodes 40,639.
+
+### v1.0.8 GitHub offline-release snapshot (2026-11-13)
+
+- File size: 383,320,064 bytes. `PRAGMA integrity_check` returned `ok`.
+- Raw hotspots: 897,655 total. Of these, 171,855 are NASA FIRMS rows assigned
+  to Nile Delta; 725,800 deterministic synthetic demo rows belong to the six
+  other preset AOIs. The full database must not be described as entirely real
+  observations.
+- Two user-drawn AOIs contain no rows under their own `aoi_id`, but the
+  pipeline intentionally selects all loaded detections that fall inside each
+  polygon. One overlaps the synthetic Punjab demo archive and one the real
+  Nile archive, so both have spatially derived series.
+- Rebuilt derived totals: harmonized_daily 75,952 · daily_aggregates 60,667 ·
+  fire_episodes 177,159 (across preset and user-drawn AOIs).
+- The versioned LOYO and continuity results for this exact snapshot are in
+  [`AUDIT_REAL.md`](AUDIT_REAL.md); they supersede neither the historical
+  2026-11-02 figures above nor the need to state which snapshot is being cited.
+
 - Check any database at any time:
 
   ```powershell

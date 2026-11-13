@@ -9,7 +9,7 @@ abstract: >-
   suppression, intra-VIIRS constellation normalization, leave-one-year-out
   climatology, and KD-tree episode clustering.
 type: software
-version: "1.0.7"
+version: "1.0.8"
 date-released: "2026-11-13"
 license: MIT
 repository-code: "https://github.com/3lyly0/embereye-spaceapps"

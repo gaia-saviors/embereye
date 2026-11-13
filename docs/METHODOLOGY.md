@@ -67,16 +67,23 @@ the annual pooled ratio is stable (7.4 / 7.2 / 7.4 over 2012-17 / 2012-21 /
 - **Validation: leave-one-year-out** over the calibration window. For each
   held-out year the factors are refitted without it and the year's total is
   predicted; reported: MAPE, mean bias, and the empirical **95% prediction
-  interval** of the relative errors. Nile Delta real-data result (pooled,
-  shipped settings): LOYO MAPE 7.5%, bias +1.6%, PI [-14.3%, +17.8%]
-  (power-law comparison: bias -15% to -23% - retired, see below).
+  interval** of the relative errors. On the v1.0.8 offline-release snapshot
+  (Nile Delta; 171,855 real FIRMS rows; static sources reclassified), the
+  reproducible annual pooled LOYO is MAPE 7.03%, bias -2.01%, PI
+  [-18.15%, +12.21%]; the per-platform variant is 9.25% / +6.41% / PI
+  [-9.48%, +21.95%]. The monthly and weekly results are much less precise:
+  MAPE 33.77% and 83.52%, respectively, with correspondingly wide intervals.
+  These are snapshot- and aggregation-specific diagnostics, not a guarantee
+  of error on an individual month or week. The 2026-11-02 audit reported
+  different figures (7.5%, +1.6%, PI [-14.3%, +17.8%]); preserve that as a
+  historical result and do not mix it with the v1.0.8 snapshot until the
+  difference is reconciled (see `docs/AUDIT_REAL.md`).
 - **Pooled vs per-platform**: both variants are fitted and validated; the
   per-platform variant wins only when its LOYO MAPE is lower by more than
-  1 percentage point (materiality margin). At the shipped settings the
-  real record gives pooled 7.5% vs per-platform 11.3% - **pooled is
-  adopted**; the Terra-only era 2000-11..2002-06 always uses the
-  Terra-specific factor (the pooled factor calibrates the two-satellite
-  mix).
+  1 percentage point (materiality margin). On the v1.0.8 snapshot pooled
+  MAPE is 7.03% vs per-platform 9.25%, so **pooled is adopted**; the
+  Terra-only era 2000-11..2002-06 always uses the Terra-specific factor
+  (the pooled factor calibrates the two-satellite mix).
 - **Resolution (item 2)**: factors are constant within a calendar month, so
   daily/weekly/monthly aggregates are consistent by construction. The
   canonical view is weekly/monthly (pre-2012 MODIS daily counts are 0-3;
@@ -117,10 +124,14 @@ NO_DATA            outside the record span
   shared months. **Direction (item 5, fixed):** `factor = successor/reference`
   over shared months; factor > 1 means the successor counts HIGHER, so the
   reference-equivalent value is **successor / factor** (the audit text
-  originally had the direction backwards). Real-record day/night factors:
-  ~1.01 (day) and ~1.05 (night); the factor spread across years gives the
-  post-continuity interval. N21's factor is stored for the day NOAA-20
-  eventually ends.
+  originally had the direction backwards). On the v1.0.8 Nile snapshot,
+  NOAA-20/S-NPP has 103 shared months: day factor 1.0204 (bounds 0.9829–1.1099)
+  and night factor 1.0527 (0.8669–1.1695). NOAA-21/S-NPP has 44 shared months:
+  day 0.9579 (0.8659–1.0338) and night 1.0285 (0.9947–1.0590). Bounds are
+  calculated separately by day/night from yearly ratios over the aligned
+  shared months. Historical values from the 2026-11-02 audit are retained in
+  `docs/AUDIT_REAL.md` §1; do not mix them with this release snapshot. N21's
+  factor is stored for the day NOAA-20 eventually ends.
 - **Interval columns (item 1)**: `n_harmonized_lo/hi` carry the LOYO 95%
   prediction interval in the transferred era and the continuity-factor
   spread after the reference end; `lo = hi = n_h` in the native era (no

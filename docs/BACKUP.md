@@ -1,8 +1,11 @@
 # BACKUP.md — PowerShell-safe backup & restore for the real data
 
-The real archive currently lives in `embereye_dev.db` (SQLite, repo root,
-~75.6 MB, 171,853 hotspots rows). After the option-(b) migration it lives in
-the compose Postgres volume. Both backup paths are below; do one NOW and one
+The historical real-data archive described here lived in `embereye_dev.db`
+(SQLite, repo root, ~75.6 MB, 171,853 hotspot rows as of 2026-11-02). After
+the option-(b) migration it lives in the compose Postgres volume. The separate
+v1.0.8 GitHub offline release is ~383 MB and mixes real Nile FIRMS rows with
+synthetic demo rows for other preset AOIs; it is not a substitute for backing
+up a live raw-data database. Both backup paths are below; do one NOW and one
 before any risky operation (`--fresh`, seeder overrides, re-runs).
 
 ## 1. SQLite (`embereye_dev.db`)

@@ -15,6 +15,12 @@ Numbers come from Ali's audit run 2026-11-02 (`all.md` + `monthly_counts.csv`,
 produced by `scripts/audit_real.py`). The state.json quiet-chunk accounting
 (§5d) is still pending — it must run on the machine that did the backfill.
 
+The values above are the historical 2026-11-02 audit snapshot. A separate
+rebuild of the GitHub offline-release database with the v1.0.8 code produced
+different LOYO and continuity values; those are recorded in §4 below. Keep the
+snapshots distinct: the older figures are preserved as history, not silently
+rewritten to match the later release.
+
 ## 0. Ground truth (real backfill)
 
 - Satellites: Terra 6,752 (2000-11-02..2026-11-01) · Aqua 6,870
@@ -69,3 +75,49 @@ Run order on Ali's machine (repo root):
 python scripts\audit_real.py all --sqlite .\embereye_dev.db
 # v1.0.5: the `static` section now carries the Phase 2 cross-tab + sensitivity
 ```
+
+## 4. Reproducible rebuild on the v1.0.8 offline-release snapshot
+
+**Input and scope.** The v1.0.0 offline-release database downloaded on
+2026-11-13 passed `PRAGMA integrity_check`. It contains 897,655 raw hotspot
+rows: 171,855 real FIRMS rows in `nile-delta-egypt` and 725,800 deterministic
+synthetic demo rows across the other six preset AOIs. The two user-drawn AOIs
+have no rows assigned directly to their IDs, but the spatial-query path
+intentionally includes loaded rows falling inside their polygons (one lies
+over the Punjab demo archive; one over Nile Delta).
+
+After Phase 2 static reclassification, Nile `static_source` is 69,887 rows
+(67,945 direct SP type=2 plus 1,942 NRT inherited rows). `recurring_source`
+marks 21,311 rows in total; 19,448 are persistence-only (`recurring_source`
+true and `static_source` false). Rebuilding all eight AOIs with the v1.0.8
+pipeline produced 75,952 `harmonized_daily`, 60,667 `daily_aggregates`, and
+177,159 `fire_episodes` rows.
+
+**LOYO, current snapshot.** Reproduce with
+`python scripts/loyo_eval.py --sqlite .\embereye_dev.db --json` after building
+the same database with the current code. On the Nile comparable subset,
+calibrated 2012–2022:
+
+| Aggregation / variant | MAPE | Bias | Empirical 95% PI | Folds / periods |
+|---|---:|---:|---:|---:|
+| Annual, pooled Terra+Aqua (selected) | 7.03% | −2.01% | [−18.15%, +12.21%] | 11 years |
+| Annual, per-platform | 9.25% | +6.41% | [−9.48%, +21.95%] | 11 years |
+| Calendar month, selected layout | 33.77% | +14.16% | [−55.80%, +133.41%] | 132 months |
+| ISO week, selected layout | 83.52% | +30.41% | [−100.00%, +437.01%] | 573 weeks |
+
+The 2026-11-02 audit reported annual pooled MAPE 7.5%, bias +1.6%, and PI
+[−14.3%, +17.8%]. The v1.0.8 database re-run does **not** reproduce those
+historical numbers. The difference is surfaced, not explained away; do not
+quote one snapshot's metrics as if they came from the other. The high monthly
+and weekly errors also mean that fine-grained estimates need visibly wide
+uncertainty, not an annual accuracy claim.
+
+**VIIRS continuity, month-aligned.** The v1.0.8 calculation now matches
+calendar months observed by both platforms and carries separate day/night
+bounds. NOAA-20/S-NPP: 103 shared months; day factor 1.0204 (bounds
+[0.9829, 1.1099]), night factor 1.0527 (bounds [0.8669, 1.1695]).
+NOAA-21/S-NPP: 44 shared months; day factor 0.9579 (bounds [0.8659, 1.0338]),
+night factor 1.0285 (bounds [0.9947, 1.0590]). A factor above 1 means the
+successor reports higher counts; reference-equivalent counts are successor /
+factor. The bounds are based on the empirical spread of year-level ratios over
+the exact shared months, separately by day/night.

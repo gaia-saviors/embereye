@@ -2,9 +2,9 @@
 # =============================================================================
 # EmberEye — publish the offline SQLite archive as a GitHub Release
 #
-#   1. Annotated tag v1.0.0-offline-data @ 2026-11-13 22:30 (sprint metadata)
-#   2. Private GitHub Release with embereye_dev.db attached
-#   3. README download instructions committed @ 2026-11-13 22:45 and pushed
+#   1. Annotated tag v1.0.8-offline-data at the current main commit
+#   2. Versioned GitHub Release with the rebuilt embereye_dev.db attached
+#   3. README download instructions point at the versioned asset
 #
 # Usage:
 #   bash publish_data_release.sh
@@ -15,9 +15,9 @@
 # =============================================================================
 set -euo pipefail
 
-TAG="v1.0.0-offline-data"
-TAG_DATE="2026-11-13T22:30:00"
-COMMIT_DATE="2026-11-13T22:45:00"
+TAG="v1.0.8-offline-data"
+TAG_DATE="${TAG_DATE:-$(date -u +%Y-%m-%dT%H:%M:%S)}"
+COMMIT_DATE="${COMMIT_DATE:-$(date -u +%Y-%m-%dT%H:%M:%S)}"
 DB_FILE="embereye_dev.db"
 BRANCH="main"
 
@@ -80,9 +80,9 @@ ok "tag pushed"
 SHA256="$(sha256sum "$DB_FILE" | awk '{print $1}')"
 ok "sha256: ${SHA256}"
 
-NOTES="Pre-processed 380MB SQLite database to run the platform offline without API keys. Required for Option B local setup.
+NOTES="Pre-processed SQLite database for EmberEye v1.0.8 offline setup.
 
-Contains NASA FIRMS MODIS/VIIRS observations. See docs/DATA_SOURCES.md for attribution and terms.
+Contains real NASA FIRMS observations for the Nile Delta AOI and deterministic synthetic demo records for the other preset AOIs. Derived tables were rebuilt with v1.0.8; see docs/AUDIT_REAL.md for snapshot-specific validation and docs/DATA_SOURCES.md for attribution and terms.
 SHA-256: ${SHA256}"
 
 if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
@@ -100,7 +100,7 @@ else
   log "Creating release ${TAG} and uploading ${DB_MIB} MiB (this can take a while)"
   gh release create "$TAG" "$DB_FILE" \
     --repo "$REPO" \
-    --title "EmberEye Offline Database (Seed)" \
+    --title "EmberEye Offline Database v1.0.8 (Nile FIRMS + synthetic demo presets)" \
     --notes "$NOTES"
   ok "release created and asset uploaded"
 fi
@@ -135,7 +135,7 @@ block = (
     "**Download the ready-to-run archive (no API key needed):**\n"
     "\n"
     "```bash\n"
-    "# Download the pre-processed 380MB database to run locally without an API key\n"
+    "# Download the pre-processed ~383MB database to run locally without an API key\n"
     f'curl -L -o {db_file} "{url}"\n'
     "```\n"
     "\n"

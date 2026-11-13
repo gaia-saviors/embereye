@@ -100,7 +100,7 @@ export default function MethodsModal() {
                         <th className="py-1.5 pr-3">Variable</th>
                         <th className="py-1.5 pr-3">Method</th>
                         <th className="py-1.5 pr-3">MAPE / Bias · Factors</th>
-                        <th className="py-1.5 pr-3">95% PI</th>
+                        <th className="py-1.5 pr-3">95% PI / Factor range</th>
                         <th className="py-1.5 pr-3">Agreement ρ</th>
                         <th className="py-1.5">Window</th>
                       </tr>
@@ -110,6 +110,19 @@ export default function MethodsModal() {
                         const p = c.params as Record<string, unknown>;
                         const isMoy = c.method === "moy_factor_v1";
                         const isCont = c.method === "continuity_ratio";
+                        const dayLo = Number(p.factor_day_lo ?? p.factor_lo ?? p.factor_day ?? 1);
+                        const dayHi = Number(p.factor_day_hi ?? p.factor_hi ?? p.factor_day ?? 1);
+                        const nightLo = Number(p.factor_night_lo ?? p.factor_lo ?? p.factor_night ?? 1);
+                        const nightHi = Number(p.factor_night_hi ?? p.factor_hi ?? p.factor_night ?? 1);
+                        const hasSeparatedBounds = [
+                          p.factor_day_lo, p.factor_day_hi,
+                          p.factor_night_lo, p.factor_night_hi,
+                        ].every((value) => value !== undefined && value !== null);
+                        const legacyLo = Number(p.factor_lo ?? p.factor_day ?? 1);
+                        const legacyHi = Number(p.factor_hi ?? p.factor_day ?? 1);
+                        const factorInterval = hasSeparatedBounds
+                          ? `Day [${dayLo.toFixed(3)}, ${dayHi.toFixed(3)}] · Night [${nightLo.toFixed(3)}, ${nightHi.toFixed(3)}]`
+                          : `Combined [${legacyLo.toFixed(3)}, ${legacyHi.toFixed(3)}]`;
                         return (
                           <tr key={c.variable + c.direction + c.method} className="border-b border-basalt-300/50">
                             <td className="py-2 pr-3 font-semibold text-alabaster font-sans">
@@ -128,7 +141,7 @@ export default function MethodsModal() {
                               {isMoy
                                 ? `[${(Number(p.pi_low) + 1).toFixed(2)}x, ${(Number(p.pi_high) + 1).toFixed(2)}x]`
                                 : isCont
-                                ? `[${(Number(p.factor_lo) || 1).toFixed(3)}, ${(Number(p.factor_hi) || 1).toFixed(3)}]`
+                                ? factorInterval
                                 : "—"}
                             </td>
                             <td className="py-2 pr-3 text-terra font-bold">{c.agreement_stat.toFixed(2)}</td>

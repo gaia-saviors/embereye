@@ -266,48 +266,97 @@ def continuity_factors(
     """Overlap-era continuity factors, successor -> reference units.
 
     Direction (Phase 2, item 5): factor = successor_total / reference_total
-    over shared months. factor > 1 means the successor counts HIGHER, so
-    the reference-equivalent value is successor / factor (NOT x factor).
-    Day and night are fitted separately (they differ on the real record:
-    e.g. N20/SNPP day ~1.01, night ~1.05). The uncertainty bounds come
-    from the per-year factor spread (empirical 2.5/97.5 percentiles).
+    over calendar months observed by both platforms. Months with detections
+    from only one platform are excluded rather than treated as overlap.
+    factor > 1 means the successor counts HIGHER, so the reference-equivalent
+    value is successor / factor (NOT x factor). Day and night are fitted
+    separately; their uncertainty bounds are the empirical 2.5/97.5
+    percentiles of yearly ratios computed from those same shared months.
     """
+    if len(arr) == 0:
+        return {
+            "shared_months": 0, "shared_months_day": 0,
+            "shared_months_night": 0, "factor_day": None,
+            "factor_night": None, "factor_day_lo": None,
+            "factor_day_hi": None, "factor_night_lo": None,
+            "factor_night_hi": None, "factor_lo": None,
+            "factor_hi": None, "per_year": {}, "per_month": {},
+        }
+
     is_ref = arr.satellite == reference_code
     is_suc = arr.satellite == successor_code
     day = arr.daynight == 0
     static = arr.static_source
-    years = np.array([date.fromordinal(int(o)).year for o in np.unique(arr.date_ord)])
-    ord_years = {int(o): date.fromordinal(int(o)).year for o in np.unique(arr.date_ord)}
-    year_of = np.array([ord_years[int(o)] for o in arr.date_ord])
+    month_key = np.array([
+        date.fromordinal(int(o)).year * 12
+        + date.fromordinal(int(o)).month - 1
+        for o in arr.date_ord
+    ], dtype=np.int32)
 
-    out: dict = {"shared_months": 0, "factor_day": None, "factor_night": None,
-                 "factor_lo": None, "factor_hi": None, "per_year": {}}
+    out: dict = {
+        "shared_months": 0, "shared_months_day": 0,
+        "shared_months_night": 0, "factor_day": None,
+        "factor_night": None, "factor_day_lo": None,
+        "factor_day_hi": None, "factor_night_lo": None,
+        "factor_night_hi": None, "factor_lo": None,
+        "factor_hi": None, "per_year": {}, "per_month": {},
+    }
+    shared_any: set[int] = set()
     for name, dn_mask in (("day", day), ("night", ~day)):
         m_ref = is_ref & dn_mask & ~static
         m_suc = is_suc & dn_mask & ~static
-        ref_y = defaultdict(float)
-        suc_y = defaultdict(float)
-        for y in np.unique(year_of[m_ref | m_suc]):
-            ref_y[int(y)] = float(np.count_nonzero(m_ref & (year_of == y)))
-            suc_y[int(y)] = float(np.count_nonzero(m_suc & (year_of == y)))
-        shared = {y: (suc_y[y], ref_y[y]) for y in ref_y
-                  if ref_y[y] > 0 and suc_y.get(y, 0.0) > 0}
+        ref_months, ref_counts = np.unique(month_key[m_ref], return_counts=True)
+        suc_months, suc_counts = np.unique(month_key[m_suc], return_counts=True)
+        ref_by_month = {int(k): int(v) for k, v in zip(ref_months, ref_counts)}
+        suc_by_month = {int(k): int(v) for k, v in zip(suc_months, suc_counts)}
+        shared = sorted(set(ref_by_month) & set(suc_by_month))
         if not shared:
             continue
-        tot_ref = sum(v[1] for v in shared.values())
-        tot_suc = sum(v[0] for v in shared.values())
-        factor = tot_suc / tot_ref if tot_ref > 0 else 1.0
-        per_year = {y: (s / r) if r > 0 else None for y, (s, r) in sorted(shared.items())}
-        vals = np.asarray([v for v in per_year.values() if v is not None], dtype=np.float64)
-        out[f"factor_{name}"] = float(factor)
-        out["per_year"][name] = {str(y): round(v, 4) for y, v in per_year.items() if v is not None}
+
+        tot_ref = sum(ref_by_month[k] for k in shared)
+        tot_suc = sum(suc_by_month[k] for k in shared)
+        factor = tot_suc / tot_ref
+        ref_by_year: dict[int, int] = defaultdict(int)
+        suc_by_year: dict[int, int] = defaultdict(int)
+        for key in shared:
+            year = key // 12
+            ref_by_year[year] += ref_by_month[key]
+            suc_by_year[year] += suc_by_month[key]
+        per_year = {
+            year: suc_by_year[year] / ref_by_year[year]
+            for year in sorted(ref_by_year) if ref_by_year[year] > 0
+        }
+        vals = np.asarray(list(per_year.values()), dtype=np.float64)
         if vals.size >= 3:
-            out["factor_lo"] = float(np.percentile(vals, 2.5))
-            out["factor_hi"] = float(np.percentile(vals, 97.5))
-        elif vals.size:
-            out["factor_lo"] = float(vals.min())
-            out["factor_hi"] = float(vals.max())
-        out["shared_months"] = max(out["shared_months"], len(shared))
+            factor_lo, factor_hi = (float(np.percentile(vals, 2.5)),
+                                    float(np.percentile(vals, 97.5)))
+        else:
+            factor_lo, factor_hi = float(vals.min()), float(vals.max())
+
+        out[f"factor_{name}"] = float(factor)
+        out[f"factor_{name}_lo"] = factor_lo
+        out[f"factor_{name}_hi"] = factor_hi
+        out[f"shared_months_{name}"] = len(shared)
+        out["per_year"][name] = {
+            str(y): round(v, 4) for y, v in per_year.items()
+        }
+        out["per_month"][name] = {
+            f"{key // 12:04d}-{key % 12 + 1:02d}": round(
+                suc_by_month[key] / ref_by_month[key], 4
+            )
+            for key in shared
+        }
+        shared_any.update(shared)
+
+    out["shared_months"] = len(shared_any)
+    lows = [out[f"factor_{name}_lo"] for name in ("day", "night")
+            if out[f"factor_{name}_lo"] is not None]
+    highs = [out[f"factor_{name}_hi"] for name in ("day", "night")
+             if out[f"factor_{name}_hi"] is not None]
+    if lows:
+        # Legacy envelope retained for older stored records and callers.
+        out["factor_lo"] = min(lows)
+        out["factor_hi"] = max(highs)
     return out
 
 
@@ -445,8 +494,10 @@ def harmonize_comparable(
     use_continuity = era_viirs & (days > snpp_end)
     f_day = float((cont or {}).get("factor_day") or 1.0)
     f_night = float((cont or {}).get("factor_night") or 1.0)
-    f_lo = float((cont or {}).get("factor_lo") or f_day)
-    f_hi = float((cont or {}).get("factor_hi") or f_day)
+    legacy_lo = float((cont or {}).get("factor_lo") or f_day)
+    legacy_hi = float((cont or {}).get("factor_hi") or f_day)
+    f_day_lo = float((cont or {}).get("factor_day_lo") or legacy_lo)
+    f_day_hi = float((cont or {}).get("factor_day_hi") or legacy_hi)
 
     n_static_out = z.copy()
     n_night_out = z.copy()
@@ -466,11 +517,11 @@ def harmonize_comparable(
     # Post-reference era: successor / factor (factor > 1 => successor higher).
     if use_continuity.any() and f_day > 0:
         n_h[use_continuity] = n_comp_suc[use_continuity] / f_day
-        n_lo[use_continuity] = n_comp_suc[use_continuity] / f_hi
-        n_hi[use_continuity] = n_comp_suc[use_continuity] / f_lo
+        n_lo[use_continuity] = n_comp_suc[use_continuity] / f_day_hi
+        n_hi[use_continuity] = n_comp_suc[use_continuity] / f_day_lo
         frp_h[use_continuity] = frp_comp_suc[use_continuity] / f_day
-        frp_lo[use_continuity] = frp_comp_suc[use_continuity] / f_hi
-        frp_hi[use_continuity] = frp_comp_suc[use_continuity] / f_lo
+        frp_lo[use_continuity] = frp_comp_suc[use_continuity] / f_day_hi
+        frp_hi[use_continuity] = frp_comp_suc[use_continuity] / f_day_lo
         n_static_out[use_continuity] = n_static_s[use_continuity] / f_night
         n_night_out[use_continuity] = n_night_s[use_continuity] / f_night
         provenance[use_continuity] = "VIIRS_NATIVE"
