@@ -56,6 +56,10 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
+      - name: Test snapshot range aggregation
+        working-directory: ./frontend
+        run: npm run test:snapshot
+
       - name: Audit frontend dependencies
         working-directory: ./frontend
         run: npm audit --audit-level=low

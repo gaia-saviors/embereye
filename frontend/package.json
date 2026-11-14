@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node scripts/verify-maplibre-worker.mjs",
+    "test:snapshot": "node --experimental-strip-types --test tests/snapshot-window.test.mjs",
     "preview": "vite preview",
     "test:e2e": "node e2e/scrub_perf.mjs"
   },

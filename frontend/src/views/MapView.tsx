@@ -14,6 +14,7 @@ import { clearCalendarCache } from "../lib/calendarCache";
 import { SENSOR_COLOR, UI } from "../lib/colors";
 import { addDays, daysBetween, prettyDate } from "../lib/format";
 import {
+  cellsForRange,
   countInWindow,
   featuresForDay,
   type SnapshotData,
@@ -151,6 +152,7 @@ export default function MapView() {
   const [archiveRetry, setArchiveRetry] = useState(0);
   const [showGibs, setShowGibs] = useState(false);
   const [showHeat, setShowHeat] = useState(false);
+  const [mapMode, setMapMode] = useState<"day" | "window">("day");
   const [basemap, setBasemap] = useState<BasemapId>(loadBasemap);
 
   const drawModeRef = useRef<"off" | "polygon">("off");
@@ -247,7 +249,7 @@ export default function MapView() {
           "circle-color": ["match", ["get", "sensor"], "MODIS", SENSOR_COLOR.MODIS, SENSOR_COLOR.VIIRS],
           "circle-radius": [
             "interpolate", ["linear"], ["coalesce", ["get", "frp_mw"], 1],
-            0, 2.5, 10, 3.8, 50, 5.5, 200, 8, 1000, 12,
+            0, 3.5, 10, 4.2, 50, 5.5, 200, 8, 1000, 12,
           ],
           "circle-stroke-width": 0.8,
           "circle-stroke-color": "rgba(12,11,14,0.95)",
@@ -272,6 +274,26 @@ export default function MapView() {
         paint: { "line-color": "#E04F33", "line-width": 0.6, "line-opacity": 0.4 },
         layout: { visibility: "none" },
       });
+
+      // Client-side range cells are Points, unlike the server grid polygons.
+      // Keep them beneath selected-day heatmap/circles for legibility.
+      map.addLayer({
+        id: "window-cell-circles", type: "circle", source: "grid-cells",
+        paint: {
+          "circle-color": [
+            "interpolate", ["linear"], ["coalesce", ["get", "max_frp_mw"], 0],
+            0, "#7A1F34", 50, "#E04F33", 200, "#F08C2E", 1000, "#FFF3B0",
+          ],
+          "circle-radius": [
+            "interpolate", ["linear"], ["coalesce", ["get", "n"], 0],
+            1, 2.5, 10, 3.5, 100, 6, 1000, 12,
+          ],
+          "circle-opacity": 0.72,
+          "circle-stroke-color": "rgba(12,11,14,0.95)",
+          "circle-stroke-width": 0.7,
+        },
+        layout: { visibility: "none" },
+      }, "hs-heat");
 
       // Draw line
       map.addSource("draw", { type: "geojson", data: EMPTY_FC });
@@ -405,6 +427,7 @@ export default function MapView() {
     if (map && map.getSource("grid-cells")) {
       map.setLayoutProperty("grid-fill", "visibility", "none");
       map.setLayoutProperty("grid-line", "visibility", "none");
+      map.setLayoutProperty("window-cell-circles", "visibility", "none");
     }
   }, [snap]);
 
@@ -445,6 +468,7 @@ export default function MapView() {
           const vis = snap ? "none" : "visible";
           map.setLayoutProperty("grid-fill", "visibility", vis);
           map.setLayoutProperty("grid-line", "visibility", vis);
+          map.setLayoutProperty("window-cell-circles", "visibility", "none");
         }
       })
       .catch((e) => alive && setArchiveErr((e as Error).message))
@@ -481,6 +505,42 @@ export default function MapView() {
     setWStart(ws);
     setWEnd(we);
   }, [cursorDate, rangeStart, rangeEnd]);
+
+  const windowCells = useMemo(
+    () => snap && mapMode === "window"
+      ? cellsForRange(snap, wStart, wEnd, filters.hideStaticSources, 0.05)
+      : [],
+    [snap, mapMode, wStart, wEnd, filters.hideStaticSources],
+  );
+
+  // This is a client-side view of the existing snapshot; toggling modes does
+  // not refetch it. The server-grid polygon layers remain separate.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!mapReady || !map) return;
+    const src = map.getSource("grid-cells") as maplibregl.GeoJSONSource | undefined;
+    if (!src) return;
+    if (!snap) {
+      if (!grid) {
+        src.setData(EMPTY_FC);
+        map.setLayoutProperty("grid-fill", "visibility", "none");
+        map.setLayoutProperty("grid-line", "visibility", "none");
+        map.setLayoutProperty("window-cell-circles", "visibility", "none");
+      }
+      return;
+    }
+    if (mapMode === "window") {
+      src.setData({ type: "FeatureCollection", features: windowCells });
+      map.setLayoutProperty("grid-fill", "visibility", "none");
+      map.setLayoutProperty("grid-line", "visibility", "none");
+      map.setLayoutProperty("window-cell-circles", "visibility", "visible");
+    } else {
+      src.setData(EMPTY_FC);
+      map.setLayoutProperty("grid-fill", "visibility", "none");
+      map.setLayoutProperty("grid-line", "visibility", "none");
+      map.setLayoutProperty("window-cell-circles", "visibility", "none");
+    }
+  }, [snap, grid, mapMode, windowCells, mapReady]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -746,8 +806,8 @@ export default function MapView() {
   const day = cursorDate ?? rangeEnd;
 
   const windowTotal = useMemo(
-    () => (snap ? countInWindow(snap, wStart, wEnd) : grid ? grid.meta.total_points : 0),
-    [snap, grid, wStart, wEnd],
+    () => (snap ? countInWindow(snap, wStart, wEnd, filters.hideStaticSources) : grid ? grid.meta.total_points : 0),
+    [snap, grid, wStart, wEnd, filters.hideStaticSources],
   );
   const dayCount = useMemo(() => {
     if (snap) {
@@ -796,6 +856,29 @@ export default function MapView() {
             <span>Density Heatmap</span>
             <span className={`h-2 w-2 rounded-full ${showHeat ? "bg-terra" : "bg-muted"}`} />
           </button>
+
+          {snap && (
+            <div role="group" aria-label="Map aggregation period" className="grid grid-cols-2 gap-1">
+              {(["day", "window"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setMapMode(mode)}
+                  aria-pressed={mapMode === mode}
+                  title={mode === "window"
+                    ? "Aggregate the rolling 120-day window into 0.05° cells; size encodes count and color encodes maximum FRP."
+                    : "Show detections on the selected day."}
+                  className={`rounded-lg border px-2.5 py-1.5 text-[10px] font-medium transition ${
+                    mapMode === mode
+                      ? "bg-terra/15 border-terra text-alabaster shadow-sm"
+                      : "bg-basalt-200 border-basalt-300 text-muted hover:border-basalt-400 hover:text-pewter"
+                  }`}
+                >
+                  {mode === "day" ? "Day" : "120-day"}
+                </button>
+              ))}
+            </div>
+          )}
 
           <button
             type="button"

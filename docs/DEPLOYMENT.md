@@ -53,6 +53,18 @@ Reload Caddy with `sudo systemctl reload caddy`. Caddy obtains and renews HTTPS 
 
 To update later, change `EMBEREYE_IMAGE_TAG` in `.env`, then rerun `pull` and `up -d --wait` with the same two Compose files. Keep the PostgreSQL volume backed up; `docker compose down -v` deletes it.
 
+### v1.1.0 MapLibre worker cache recovery
+
+If an existing v1.1.0 browser session still fails to load the MapLibre worker after deployment, open DevTools **Network**, filter for `maplibre-gl-worker`, select the worker request, and copy its exact **Request URL** from **Headers → General**. In the DevTools Console, substitute that full URL below, then run this one-time refresh:
+
+```js
+(async () => {
+  const actualUrl = 'PASTE THE EXACT REQUEST URL FROM DEVTOOLS HERE';
+  await fetch(actualUrl, {cache: 'reload'});
+  location.reload();
+})();
+```
+
 ## Read-only SQLite archive
 
 This option serves the downloadable mixed v1.0.8 archive instead of creating a new synthetic seed. Download it after the repository/release is public:

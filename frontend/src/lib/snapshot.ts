@@ -169,22 +169,41 @@ export function dayRowRange(s: SnapshotData, dayIso: string): { from: number; to
   return daySlice(s, isoToDayOrd(dayIso));
 }
 
+/** Row indices for the inclusive local-date window [startIso, endIso]. */
+export function rangeRowBounds(
+  s: SnapshotData, startIso: string, endIso: string,
+): { from: number; to: number } {
+  const startDay = isoToDayOrd(startIso), endDay = isoToDayOrd(endIso);
+  const lowerBound = (dayOrd: number): number => {
+    let lo = 0, hi = s.dayValues.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (s.dayValues[mid] < dayOrd) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  };
+  const firstDay = lowerBound(startDay);
+  // Searching from firstDay keeps reversed windows empty rather than returning
+  // a backwards slice, matching countInWindow's historical behavior.
+  let lo = firstDay, hi = s.dayValues.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (s.dayValues[mid] <= endDay) lo = mid + 1; else hi = mid;
+  }
+  return { from: s.cum[firstDay], to: s.cum[lo] };
+}
+
 /** Count rows whose local_date lies within [startIso, endIso] inclusive. */
-export function countInWindow(s: SnapshotData, startIso: string, endIso: string): number {
-  const a = isoToDayOrd(startIso), b = isoToDayOrd(endIso);
-  // first day index with day >= a, last with day <= b (binary searches)
-  let lo = 0, hi = s.dayValues.length; // lower bound
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (s.dayValues[mid] < a) lo = mid + 1; else hi = mid;
+export function countInWindow(
+  s: SnapshotData, startIso: string, endIso: string, hideStatic = false,
+): number {
+  const { from, to } = rangeRowBounds(s, startIso, endIso);
+  if (!hideStatic) return to - from;
+  let count = 0;
+  for (let i = from; i < to; i++) {
+    if (!(s.flags[i] & FLAG_STATIC)) count++;
   }
-  const i0 = lo;
-  lo = i0; hi = s.dayValues.length; // lower bound of b+1
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (s.dayValues[mid] <= b) lo = mid + 1; else hi = mid;
-  }
-  return s.cum[lo] - s.cum[i0];
+  return count;
 }
 
 const CONF_NAMES = ["LOW", "NOMINAL", "HIGH", "N/A"] as const;
@@ -228,4 +247,53 @@ export function featuresForDay(
     });
   }
   return out;
+}
+
+export interface CellFeature {
+  type: "Feature";
+  geometry: { type: "Point"; coordinates: [number, number] };
+  properties: { n: number; max_frp_mw: number; lat: number; lon: number };
+}
+
+/** Aggregate observations in an inclusive date window to degree-grid cells. */
+export function cellsForRange(
+  s: SnapshotData,
+  startIso: string,
+  endIso: string,
+  hideStatic: boolean,
+  cellDeg = 0.05,
+): CellFeature[] {
+  if (!Number.isFinite(cellDeg) || cellDeg <= 0) {
+    throw new RangeError("cellDeg must be a positive finite number");
+  }
+  const { from, to } = rangeRowBounds(s, startIso, endIso);
+  const cells = new Map<string, CellFeature>();
+  for (let i = from; i < to; i++) {
+    if (hideStatic && (s.flags[i] & FLAG_STATIC)) continue;
+    const latBin = Math.floor(s.lat[i] / cellDeg);
+    const lonBin = Math.floor(s.lon[i] / cellDeg);
+    // The separator makes signed latitude/longitude bin pairs unambiguous.
+    const key = `${latBin},${lonBin}`;
+    let feature = cells.get(key);
+    if (!feature) {
+      const lat = (latBin + 0.5) * cellDeg;
+      const lon = (lonBin + 0.5) * cellDeg;
+      feature = {
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [lon, lat] },
+        properties: { n: 0, max_frp_mw: NaN, lat, lon },
+      };
+      cells.set(key, feature);
+    }
+    feature.properties.n++;
+    const frp = s.frp[i];
+    if (!Number.isNaN(frp) &&
+        (Number.isNaN(feature.properties.max_frp_mw) || feature.properties.max_frp_mw < frp)) {
+      feature.properties.max_frp_mw = frp;
+    }
+  }
+  for (const feature of cells.values()) {
+    if (Number.isNaN(feature.properties.max_frp_mw)) feature.properties.max_frp_mw = 0;
+  }
+  return Array.from(cells.values());
 }
