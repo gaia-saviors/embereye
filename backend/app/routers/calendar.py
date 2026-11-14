@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..db import get_db
-from ..models import HarmonizedDaily, Hotspot, SeasonMetrics
+from ..models import Aoi, HarmonizedDaily, Hotspot, SeasonMetrics
 from ..schemas import (
     BaselineInfo,
     CalendarCell,
@@ -79,7 +79,7 @@ def _sum_if(cond, value):
 
 def _filtered_days(
     db: Session,
-    aoi: str,
+    aoi: Aoi,
     start: date | None,
     end: date | None,
     base_by_date: dict[date, HarmonizedDaily],
@@ -118,27 +118,74 @@ def _filtered_days(
     night = Hotspot.daynight == "N"
     static = Hotspot.static_source.is_(True)
 
-    stmt = (
-        select(
-            Hotspot.local_date.label("d"),
-            _count_if(modis).label("n_modis"),
-            _count_if(viirs).label("n_viirs"),
-            _count_if(night).label("n_night"),
-            _count_if(static).label("n_static"),
-            func.coalesce(func.sum(Hotspot.frp_mw), 0.0).label("frp"),
-            _sum_if(modis, Hotspot.frp_mw).label("frp_modis"),
-            _sum_if(viirs, Hotspot.frp_mw).label("frp_viirs"),
+    if aoi.is_preset:
+        stmt = (
+            select(
+                Hotspot.local_date.label("d"),
+                _count_if(modis).label("n_modis"),
+                _count_if(viirs).label("n_viirs"),
+                _count_if(night).label("n_night"),
+                _count_if(static).label("n_static"),
+                func.coalesce(func.sum(Hotspot.frp_mw), 0.0).label("frp"),
+                _sum_if(modis, Hotspot.frp_mw).label("frp_modis"),
+                _sum_if(viirs, Hotspot.frp_mw).label("frp_viirs"),
+            )
+            .where(Hotspot.aoi_id == aoi.id, kept)
         )
-        .where(Hotspot.aoi_id == aoi)
-        .where(kept)
-    )
-    if start is not None:
-        stmt = stmt.where(Hotspot.local_date >= start)
-    if end is not None:
-        stmt = stmt.where(Hotspot.local_date <= end)
-    stmt = stmt.group_by(Hotspot.local_date).order_by(Hotspot.local_date)
+        if start is not None:
+            stmt = stmt.where(Hotspot.local_date >= start)
+        if end is not None:
+            stmt = stmt.where(Hotspot.local_date <= end)
+        stmt = stmt.group_by(Hotspot.local_date).order_by(Hotspot.local_date)
+        agg_by_date = {r["d"]: r for r in db.execute(stmt).mappings()}
+    else:
+        # The pipeline builds custom AOI aggregates from the canonical record
+        # store by bbox + point-in-polygon. Repeat that spatial definition here
+        # because canonical hotspots retain their ingest/preset aoi_id.
+        import json
+        import numpy as np
+        from ..geometry import points_in_polygon
 
-    agg_by_date = {r["d"]: r for r in db.execute(stmt).mappings()}
+        stmt = select(
+            Hotspot.local_date, Hotspot.lon, Hotspot.lat,
+            Hotspot.sensor_family, Hotspot.daynight, Hotspot.static_source,
+            Hotspot.frp_mw,
+        ).where(
+            Hotspot.lat >= aoi.south, Hotspot.lat <= aoi.north,
+            Hotspot.lon >= aoi.west, Hotspot.lon <= aoi.east,
+            kept,
+        )
+        if start is not None:
+            stmt = stmt.where(Hotspot.local_date >= start)
+        if end is not None:
+            stmt = stmt.where(Hotspot.local_date <= end)
+        ring = json.loads(aoi.geojson)["coordinates"][0]
+        agg_by_date: dict[date, dict] = {}
+        result = db.execute(stmt)
+        while batch := result.fetchmany(50_000):
+            inside = points_in_polygon(
+                np.asarray([r[1] for r in batch]),
+                np.asarray([r[2] for r in batch]), ring,
+            )
+            for r, keep_point in zip(batch, inside):
+                if not keep_point:
+                    continue
+                d, _lon, _lat, family, dn, is_static, frp = r
+                item = agg_by_date.setdefault(d, {
+                    "n_modis": 0, "n_viirs": 0, "n_night": 0,
+                    "n_static": 0, "frp": 0.0,
+                    "frp_modis": 0.0, "frp_viirs": 0.0,
+                })
+                item["n_modis"] += int(family == "MODIS")
+                item["n_viirs"] += int(family == "VIIRS")
+                item["n_night"] += int(dn == "N")
+                item["n_static"] += int(is_static is True)
+                if frp is not None:
+                    item["frp"] += float(frp)
+                    if family == "MODIS":
+                        item["frp_modis"] += float(frp)
+                    elif family == "VIIRS":
+                        item["frp_viirs"] += float(frp)
 
     # Keep the full harmonized coverage (same day count / year axis as the
     # unfiltered calendar); days with no surviving detections become zeros.
@@ -262,11 +309,41 @@ def _weekly(rows: list[HarmonizedDaily], nrt_dates: set) -> list[WeeklyCell]:
     return weeks
 
 
-def _nrt_dates(db: Session) -> set:
-    """Local dates holding NRT product rows (near-real-time, revisable)."""
-    return set(db.execute(
-        select(Hotspot.local_date).where(Hotspot.firms_product == "NRT")
-    ).scalars().all())
+def _nrt_dates(db: Session, aoi: Aoi, start: date | None = None,
+               end: date | None = None) -> set:
+    """AOI-local dates holding NRT product rows (near-real-time, revisable)."""
+    stmt = select(Hotspot.local_date)
+    conds = [Hotspot.firms_product == "NRT"]
+    if aoi.is_preset:
+        conds.append(Hotspot.aoi_id == aoi.id)
+    else:
+        conds.extend([
+            Hotspot.lat >= aoi.south, Hotspot.lat <= aoi.north,
+            Hotspot.lon >= aoi.west, Hotspot.lon <= aoi.east,
+        ])
+    if start is not None:
+        conds.append(Hotspot.local_date >= start)
+    if end is not None:
+        conds.append(Hotspot.local_date <= end)
+    stmt = stmt.where(*conds)
+    if aoi.is_preset:
+        return set(db.execute(stmt).scalars().all())
+    import json
+    import numpy as np
+    from ..geometry import points_in_polygon
+
+    rows = db.execute(select(
+        Hotspot.local_date, Hotspot.lon, Hotspot.lat,
+    ).where(*conds))
+    ring = json.loads(aoi.geojson)["coordinates"][0]
+    dates = set()
+    while batch := rows.fetchmany(50_000):
+        inside = points_in_polygon(
+            np.asarray([r[1] for r in batch]),
+            np.asarray([r[2] for r in batch]), ring,
+        )
+        dates.update(r[0] for r, keep in zip(batch, inside) if keep)
+    return dates
 
 
 def _finding(rows: list[HarmonizedDaily], weeks: list[WeeklyCell]) -> CalendarFinding:
@@ -353,6 +430,13 @@ def calendar(
     db: Session = Depends(get_db),
 ) -> CalendarResponse:
     cfg = get_settings()
+    aoi_row = db.get(Aoi, aoi)
+    if aoi_row is None:
+        raise HTTPException(404, "AOI not found")
+    if start is not None and end is not None and start > end:
+        raise HTTPException(422, "start must be on or before end")
+    if start_year is not None and end_year is not None and start_year > end_year:
+        raise HTTPException(422, "start_year must be on or before end_year")
     stmt = select(HarmonizedDaily).where(HarmonizedDaily.aoi_id == aoi).order_by(HarmonizedDaily.local_date)
     if start_year is not None and isinstance(start_year, int):
         stmt = stmt.where(HarmonizedDaily.local_date >= date(start_year, 1, 1))
@@ -379,7 +463,7 @@ def calendar(
         lo = date(start_year, 1, 1) if isinstance(start_year, int) else start
         hi = date(end_year, 12, 31) if isinstance(end_year, int) else end
         rows = _filtered_days(
-            db, aoi, lo, hi, {r.local_date: r for r in base_rows},
+            db, aoi_row, lo, hi, {r.local_date: r for r in base_rows},
             sensor=sensor, satellite=satellite, confidence=confidence,
             daynight=daynight, min_frp=min_frp, hide_static=hide_static,
         )
@@ -409,13 +493,18 @@ def calendar(
         )
         for r in rows
     ]
-    seasons = db.execute(
-        select(SeasonMetrics).where(SeasonMetrics.aoi_id == aoi).order_by(SeasonMetrics.year)
-    ).scalars().all()
+    lo = date(start_year, 1, 1) if start_year is not None else start
+    hi = date(end_year, 12, 31) if end_year is not None else end
+    seasons_stmt = select(SeasonMetrics).where(SeasonMetrics.aoi_id == aoi)
+    if lo is not None:
+        seasons_stmt = seasons_stmt.where(SeasonMetrics.year >= lo.year)
+    if hi is not None:
+        seasons_stmt = seasons_stmt.where(SeasonMetrics.year <= hi.year)
+    seasons = db.execute(seasons_stmt.order_by(SeasonMetrics.year)).scalars().all()
     years = sorted({c.date.year for c in cells})
     # STEP B: weekly cells for the WHOLE record (single scale/unit), the
     # headline finding from the same series, and NRT provisional marking.
-    nrt = _nrt_dates(db)
+    nrt = _nrt_dates(db, aoi_row, lo, hi)
     weeks_all = _weekly(rows, nrt)
     finding = _finding(rows, weeks_all)
     # Phase 3A (defect 3) compatibility view: the transferred-era subset.

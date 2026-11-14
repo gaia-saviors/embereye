@@ -2,6 +2,22 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: "Public Sans";
+  src: url("/fonts/PublicSans-Variable-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Source Serif 4";
+  src: url("/fonts/SourceSerif4-Variable-latin.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 200 900;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --color-bg: #0C0B0E;
@@ -11,7 +27,7 @@
   --color-border-2: #383444;
   --color-text: #F4F3F6;
   --color-text-secondary: #A09CA8;
-  --color-text-muted: #686472;
+  --color-text-muted: #A09CA8;
   --color-terra: #E04F33;
   --color-amber: #E5A93C;
   --color-jade: #10B981;
@@ -27,8 +43,13 @@ body,
 
 body {
   margin: 0;
-  font-family: "Inter", system-ui, "Segoe UI", Roboto, sans-serif;
+  font-family: "Public Sans", system-ui, "Segoe UI", Roboto, sans-serif;
   color: #F4F3F6;
+}
+
+/* Keep helper text readable on the basalt surface (6.88:1 on #141318). */
+.text-muted {
+  color: var(--color-text-muted);
 }
 
 /* Glassmorphic utility */
@@ -90,7 +111,7 @@ body {
   font-size: 12px;
   line-height: 1.45;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-  font-family: "Inter", system-ui, sans-serif;
+  font-family: "Public Sans", system-ui, sans-serif;
 }
 
 /* MapLibre overrides */
@@ -137,12 +158,12 @@ input[type="checkbox"] {
   accent-color: #E04F33;
 }
 
-/* Number inputs — JetBrains Mono */
+/* Number inputs — tabular system mono */
 input[type="number"] {
-  font-family: "JetBrains Mono", monospace;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
 }
 input[type="date"] {
-  font-family: "JetBrains Mono", monospace;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   color-scheme: dark;
 }
 
@@ -181,6 +202,14 @@ input[type="date"] {
 :focus-visible {
   outline: 2px solid #E5A93C;
   outline-offset: 2px;
+}
+
+.calendar-cell-control:focus-visible {
+  outline: 2px solid #FFF3B0;
+  outline-offset: 2px;
+  stroke: #FFF3B0;
+  stroke-width: 2px;
+  filter: drop-shadow(0 0 2px rgba(255, 243, 176, 0.9));
 }
 
 button:disabled {

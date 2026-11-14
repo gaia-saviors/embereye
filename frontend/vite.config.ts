@@ -19,16 +19,21 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "dist",
-    chunkSizeWarningLimit: 1600,
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          echarts: ["echarts"],
-          maplibre: ["maplibre-gl"],
-          react: ["react", "react-dom"],
+      outDir: "dist",
+      chunkSizeWarningLimit: 1600,
+      rollupOptions: {
+        output: {
+          manualChunks: (id: string) => {
+            if (id.includes("/node_modules/echarts/")) return "echarts";
+            if (id.includes("/node_modules/maplibre-gl/")) return "maplibre";
+            if (
+              id.includes("/node_modules/react/") ||
+              id.includes("/node_modules/react-dom/") ||
+              id.includes("/node_modules/zustand/")
+            ) return "react";
+            return undefined;
+          },
         },
-      },
     },
   },
 });

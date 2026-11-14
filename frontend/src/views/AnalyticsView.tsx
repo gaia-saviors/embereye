@@ -38,6 +38,7 @@ export default function AnalyticsView() {
   const [series, setSeries] = useState<TimeseriesPoint[] | null>(null);
   const [res, setRes] = useState<"day" | "week" | "month">("month");
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const [clim, setClim] = useState<ClimatologyResponse | null>(null);
   const [seasons, setSeasons] = useState<SeasonOut[] | null>(null);
@@ -65,7 +66,7 @@ export default function AnalyticsView() {
     return () => {
       alive = false;
     };
-  }, [aoiId, dataRevision]);
+  }, [aoiId, dataRevision, retryCount]);
 
   useEffect(() => {
     if (!aoiId) return;
@@ -89,31 +90,44 @@ export default function AnalyticsView() {
     return () => {
       alive = false;
     };
-  }, [aoiId, rangeStart, rangeEnd, res, includeLayers, dataRevision]);
+  }, [aoiId, rangeStart, rangeEnd, res, includeLayers, dataRevision, retryCount]);
 
   if (!aoiId) return <Centered>Select an area of interest.</Centered>;
   if (error) {
-    const isNoData = error.includes("404") || error.includes("no");
+    const normalizedError = error.toLowerCase();
+    const isNoData = normalizedError.includes("404") || /\b(no data|not found|no analytics)\b/.test(normalizedError);
     return (
       <div className="flex h-full flex-col items-center justify-center p-8 text-center bg-basalt">
-        <div className="max-w-md rounded-2xl border border-basalt-300 bg-basalt-100 p-8 shadow-2xl">
+        <div role="alert" className="max-w-md rounded-2xl border border-basalt-300 bg-basalt-100 p-8 shadow-2xl">
           <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-full bg-terra/10 text-2xl text-terra">
             📊
           </div>
           <h3 className="mb-2 font-display text-base font-bold text-alabaster">
-            {isNoData ? "Analytics Not Available for this AOI" : "Analytics Error"}
+            {isNoData ? "Analytics Not Available for this AOI" : "Analytics Request Failed"}
           </h3>
           <p className="mb-5 text-xs leading-relaxed text-pewter">
             {isNoData
-              ? "The full 26-year NASA FIRMS analytics archive is active for Nile Delta, Egypt. Other preset archives can be populated via demo seeder or CSV archives."
+              ? `The selected AOI has no precomputed analytics in this database. Check the archive provenance, or choose an area with loaded records. Details: ${error}`
               : error}
           </p>
-          <button
-            onClick={() => useStore.getState().setAoiId("nile-delta-egypt")}
-            className="rounded-lg bg-terra px-5 py-2.5 font-display text-xs font-bold text-alabaster shadow-md transition hover:bg-ember-400"
-          >
-            Switch to Nile Delta (Active Archive)
-          </button>
+          <div className="flex flex-wrap justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => setRetryCount((count) => count + 1)}
+              className="rounded-lg border border-basalt-400 px-4 py-2.5 font-display text-xs font-bold text-pewter hover:border-terra/60 hover:text-alabaster"
+            >
+              Retry analytics
+            </button>
+            {aoiId !== "nile-delta-egypt" && (
+              <button
+                type="button"
+                onClick={() => useStore.getState().setAoiId("nile-delta-egypt")}
+                className="rounded-lg bg-terra px-5 py-2.5 font-display text-xs font-bold text-alabaster shadow-md transition hover:bg-ember-400"
+              >
+                Try Nile Delta AOI
+              </button>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -134,7 +148,7 @@ export default function AnalyticsView() {
   return (
     <div className="h-full overflow-y-auto bg-basalt p-5 flex flex-col gap-5">
       <div role="note" className="rounded-xl border border-amber/30 bg-amber/5 px-4 py-2.5 text-[11px] leading-relaxed text-pewter">
-        <span className="font-semibold text-amber">Scope:</span> the date range applies to this time-series chart only. Ribbon filters apply to Map and Calendar; headline KPIs, climatology, seasons, and episode rankings use the stored aggregate series.
+        <span className="font-semibold text-amber">Scope:</span> the date range applies to the time-series chart and downloads. Ribbon filters apply to Map and Calendar, and to hotspot exports. Headline KPIs, climatology, seasons, and episode rankings use the stored aggregate series.
       </div>
       {/* ── Headline Analytic Banner ── */}
       <section className="rounded-2xl border border-terra/40 bg-basalt-100 p-4 shadow-md">
@@ -415,6 +429,9 @@ export default function AnalyticsView() {
         <h3 className="w-full font-display text-xs font-bold tracking-wide text-alabaster uppercase mb-1">
           Direct Data &amp; GIS Exports
         </h3>
+        <p className="w-full text-[10px] leading-relaxed text-muted">
+          Hotspot exports are capped at 500,000 rows; narrow the date range or filters if you need a smaller, exact export.
+        </p>
         {[
           ["harmonized", "csv"],
           ["daily", "csv"],
@@ -472,6 +489,7 @@ function monthLabel(iso: string): string {
 
 function TimeseriesChart({ points, res }: { points: TimeseriesPoint[]; res: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [tableOpen, setTableOpen] = useState(false);
   useEffect(() => {
     if (!ref.current) return;
     const chart = echarts.init(ref.current, "dark");
@@ -494,7 +512,7 @@ function TimeseriesChart({ points, res }: { points: TimeseriesPoint[]; res: stri
       grid: { left: 48, right: 16, top: 32, bottom: 46 },
       legend: {
         top: 0,
-        textStyle: { fontSize: 11, color: "#A09CA8", fontFamily: "Inter" },
+        textStyle: { fontSize: 11, color: "#A09CA8", fontFamily: "Public Sans" },
         itemWidth: 12,
         itemHeight: 8,
         data: [
@@ -525,7 +543,7 @@ function TimeseriesChart({ points, res }: { points: TimeseriesPoint[]; res: stri
       ],
       xAxis: {
         type: "time",
-        axisLabel: { fontSize: 10, color: "#A09CA8", fontFamily: "JetBrains Mono" },
+        axisLabel: { fontSize: 10, color: "#A09CA8", fontFamily: "ui-monospace" },
         axisLine: { lineStyle: { color: "#25232C" } },
       },
       yAxis: [
@@ -534,7 +552,7 @@ function TimeseriesChart({ points, res }: { points: TimeseriesPoint[]; res: stri
           name: "detections",
           min: 0,
           nameTextStyle: { fontSize: 10, color: "#A09CA8" },
-          axisLabel: { fontSize: 10, color: "#A09CA8", fontFamily: "JetBrains Mono" },
+          axisLabel: { fontSize: 10, color: "#A09CA8", fontFamily: "ui-monospace" },
           splitLine: { lineStyle: { color: "#25232C" } },
         },
       ],
@@ -609,15 +627,70 @@ function TimeseriesChart({ points, res }: { points: TimeseriesPoint[]; res: stri
       chart.dispose();
     };
   }, [points, res]);
-  return <div ref={ref} className="h-64" />;
+  return (
+    <>
+      <div
+        ref={ref}
+        className="h-64"
+        role="img"
+        aria-label={`Harmonized fire detections at ${res} resolution. The chart compares MODIS and VIIRS observations, harmonized estimates, optional static and night layers, and the LOYO uncertainty interval. A full data table follows.`}
+      />
+      <details
+        className="mt-2 rounded-lg border border-basalt-300 bg-basalt-200/40 px-3 py-2 text-xs"
+        onToggle={(event) => setTableOpen(event.currentTarget.open)}
+      >
+        <summary className="cursor-pointer font-semibold text-pewter hover:text-alabaster">
+          View time-series values as a table ({points.length} {res} periods)
+        </summary>
+        <p className="mt-2 text-[11px] text-muted">
+          These are the values plotted above. Lower and upper columns are the LOYO prediction interval when available.
+        </p>
+        {tableOpen && (
+          <div className="mt-2 max-h-64 overflow-auto rounded-md border border-basalt-300" role="region" aria-label="Time-series data table">
+            <table className="min-w-[900px] w-full text-left text-[11px]">
+              <thead className="sticky top-0 bg-basalt-100 text-muted font-mono">
+                <tr>
+                  <th scope="col" className="px-2 py-1.5">Period</th>
+                  <th scope="col" className="px-2 py-1.5">MODIS raw</th>
+                  <th scope="col" className="px-2 py-1.5">VIIRS raw</th>
+                  <th scope="col" className="px-2 py-1.5">Harmonized</th>
+                  <th scope="col" className="px-2 py-1.5">95% lower</th>
+                  <th scope="col" className="px-2 py-1.5">95% upper</th>
+                  <th scope="col" className="px-2 py-1.5">Static</th>
+                  <th scope="col" className="px-2 py-1.5">Night</th>
+                  <th scope="col" className="px-2 py-1.5">Harmonized FRP (MW)</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono text-pewter">
+                {points.map((point) => (
+                  <tr key={point.date} className="border-t border-basalt-300">
+                    <th scope="row" className="px-2 py-1 text-alabaster">{point.date}</th>
+                    <td className="px-2 py-1">{fmtInt(point.n_modis)}</td>
+                    <td className="px-2 py-1">{fmtInt(point.n_viirs)}</td>
+                    <td className="px-2 py-1">{fmtNum(point.n_harmonized)}</td>
+                    <td className="px-2 py-1">{point.n_harmonized_lo == null ? "—" : fmtNum(point.n_harmonized_lo)}</td>
+                    <td className="px-2 py-1">{point.n_harmonized_hi == null ? "—" : fmtNum(point.n_harmonized_hi)}</td>
+                    <td className="px-2 py-1">{fmtInt(point.n_static)}</td>
+                    <td className="px-2 py-1">{fmtInt(point.n_night)}</td>
+                    <td className="px-2 py-1">{fmtNum(point.frp_harmonized_mw)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </details>
+    </>
+  );
 }
 
 function ClimatologyChart({ clim }: { clim: ClimatologyResponse }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [tableOpen, setTableOpen] = useState(false);
+  const sortedDoy = [...clim.doy].sort((a, b) => a.doy - b.doy);
   useEffect(() => {
     if (!ref.current) return;
     const chart = echarts.init(ref.current, "dark");
-    const sortedDoy = [...clim.doy].sort((a, b) => a.doy - b.doy);
     const base = sortedDoy.map((d) => Math.min(d.p10_n, d.p90_n));
     const span = sortedDoy.map((d) => Math.max(0, d.p90_n - Math.min(d.p10_n, d.p90_n)));
 
@@ -645,7 +718,7 @@ function ClimatologyChart({ clim }: { clim: ClimatologyResponse }) {
           const pt = sortedDoy[idx];
           if (!pt) return "";
           return (
-            `<div style="font-family:JetBrains Mono,monospace;font-size:11px;">` +
+            `<div style="font-family:ui-monospace,monospace;font-size:11px;">` +
             `<b>Day of Year ${pt.doy}</b><br/>` +
             `<span style="color:#E04F33">Mean: <b>${pt.mean_n.toFixed(1)}</b></span> fires/day<br/>` +
             `<span style="color:#A09CA8">p10–p90 band: <b>${pt.p10_n.toFixed(1)} – ${pt.p90_n.toFixed(1)}</b></span>` +
@@ -658,7 +731,7 @@ function ClimatologyChart({ clim }: { clim: ClimatologyResponse }) {
         data: sortedDoy.map((d) => String(d.doy)),
         name: "day of year",
         nameTextStyle: { fontSize: 10, color: "#A09CA8" },
-        axisLabel: { interval: 29, fontSize: 10, color: "#A09CA8", fontFamily: "JetBrains Mono" },
+        axisLabel: { interval: 29, fontSize: 10, color: "#A09CA8", fontFamily: "ui-monospace" },
         axisTick: { alignWithLabel: true },
         splitLine: { show: false },
       },
@@ -667,7 +740,7 @@ function ClimatologyChart({ clim }: { clim: ClimatologyResponse }) {
         min: 0,
         name: "detections/day",
         nameTextStyle: { fontSize: 10, color: "#A09CA8" },
-        axisLabel: { fontSize: 10, color: "#A09CA8", fontFamily: "JetBrains Mono" },
+        axisLabel: { fontSize: 10, color: "#A09CA8", fontFamily: "ui-monospace" },
         splitLine: { lineStyle: { color: "#25232C" } },
       },
       series: [
@@ -707,7 +780,50 @@ function ClimatologyChart({ clim }: { clim: ClimatologyResponse }) {
       chart.dispose();
     };
   }, [clim]);
-  return <div ref={ref} className="h-56" />;
+  return (
+    <>
+      <div
+        ref={ref}
+        className="h-56"
+        role="img"
+        aria-label={`Day-of-year climatology for baseline ${clim.baseline.start_year} to ${clim.baseline.end_year}. The chart shows mean daily detections and the p10 to p90 range. A data table follows.`}
+      />
+      <details
+        className="mt-2 rounded-lg border border-basalt-300 bg-basalt-200/40 px-3 py-2 text-xs"
+        onToggle={(event) => setTableOpen(event.currentTarget.open)}
+      >
+        <summary className="cursor-pointer font-semibold text-pewter hover:text-alabaster">
+          View climatology values as a table ({sortedDoy.length} days)
+        </summary>
+        {tableOpen && (
+          <div className="mt-2 max-h-56 overflow-auto rounded-md border border-basalt-300" role="region" aria-label="Day-of-year climatology data table">
+            <table className="w-full text-left text-[11px]">
+              <thead className="sticky top-0 bg-basalt-100 text-muted font-mono">
+                <tr>
+                  <th scope="col" className="px-2 py-1.5">Day of year</th>
+                  <th scope="col" className="px-2 py-1.5">Mean fires/day</th>
+                  <th scope="col" className="px-2 py-1.5">p10</th>
+                  <th scope="col" className="px-2 py-1.5">p90</th>
+                  <th scope="col" className="px-2 py-1.5">Mean FRP (MW)</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono text-pewter">
+                {sortedDoy.map((point) => (
+                  <tr key={point.doy} className="border-t border-basalt-300">
+                    <th scope="row" className="px-2 py-1 text-alabaster">{point.doy}</th>
+                    <td className="px-2 py-1">{fmtNum(point.mean_n)}</td>
+                    <td className="px-2 py-1">{fmtNum(point.p10_n)}</td>
+                    <td className="px-2 py-1">{fmtNum(point.p90_n)}</td>
+                    <td className="px-2 py-1">{fmtNum(point.mean_frp)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </details>
+    </>
+  );
 }
 
 function SeasonsChart({ seasons }: { seasons: SeasonOut[] }) {
@@ -740,7 +856,7 @@ function SeasonsChart({ seasons }: { seasons: SeasonOut[] }) {
       xAxis: {
         type: "category",
         data: seasons.map((s) => s.year + (s.is_partial ? "*" : "")),
-        axisLabel: { fontSize: 9, color: "#A09CA8", rotate: 45, fontFamily: "JetBrains Mono" },
+        axisLabel: { fontSize: 9, color: "#A09CA8", rotate: 45, fontFamily: "ui-monospace" },
         axisLine: { lineStyle: { color: "#25232C" } },
       },
       yAxis: {
@@ -748,7 +864,7 @@ function SeasonsChart({ seasons }: { seasons: SeasonOut[] }) {
         min: 0,
         name: "days",
         nameTextStyle: { fontSize: 10, color: "#A09CA8" },
-        axisLabel: { fontSize: 10, color: "#A09CA8", fontFamily: "JetBrains Mono" },
+        axisLabel: { fontSize: 10, color: "#A09CA8", fontFamily: "ui-monospace" },
         splitLine: { lineStyle: { color: "#25232C" } },
       },
       series: [
@@ -793,7 +909,14 @@ function SeasonsChart({ seasons }: { seasons: SeasonOut[] }) {
       chart.dispose();
     };
   }, [seasons]);
-  return <div ref={ref} className="h-48" />;
+  return (
+    <div
+      ref={ref}
+      className="h-48"
+      role="img"
+      aria-label="Annual fire-season length, separated into estimated transferred MODIS years and measured VIIRS years. A year-by-year data table follows."
+    />
+  );
 }
 
 function Card({ label, value, color, accent, tip }: {

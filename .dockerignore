@@ -5,6 +5,9 @@
 **/node_modules
 **/dist
 **/*.db
+**/*.sqlite3
 **/.env
+**/.env.*
+**/.env*
 **/.DS_Store
 **/.git

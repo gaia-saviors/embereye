@@ -9,7 +9,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
@@ -20,6 +20,44 @@ from ..schemas import ExportFormat, ExportLevel
 router = APIRouter()
 
 CHUNK = 5000
+HOTSPOT_EXPORT_LIMIT = 500_000
+
+
+def _count_hotspot_export(db: Session, a: Aoi, start, end, sensor, satellite,
+                          confidence, daynight, min_frp, hide_static: bool) -> int:
+    stmt = _apply_common(
+        select(func.count()).select_from(Hotspot), a, start, end,
+        sensor, satellite, confidence, daynight, min_frp,
+    )
+    if hide_static:
+        stmt = stmt.where(Hotspot.static_source.is_(False))
+    if a.is_preset:
+        return int(db.scalar(stmt) or 0)
+
+    coords = _apply_common(
+        select(Hotspot.lon, Hotspot.lat), a, start, end,
+        sensor, satellite, confidence, daynight, min_frp,
+    )
+    if hide_static:
+        coords = coords.where(Hotspot.static_source.is_(False))
+    from ..geometry import points_in_polygon
+    import numpy as np
+    ring = json.loads(a.geojson)["coordinates"][0]
+    result = db.execute(coords.execution_options(stream_results=True, yield_per=50_000))
+    total = 0
+    while batch := result.fetchmany(50_000):
+        inside = points_in_polygon(
+            np.asarray([r[0] for r in batch]),
+            np.asarray([r[1] for r in batch]), ring,
+        )
+        total += int(inside.sum())
+    return total
+
+
+def _csv_line(values: list) -> bytes:
+    buf = io.StringIO()
+    csv.writer(buf, lineterminator="\n").writerow(values)
+    return buf.getvalue().encode("utf-8")
 
 
 def _csv_response(filename: str, header: list[str], rows: Iterator[list]) -> StreamingResponse:
@@ -74,10 +112,11 @@ def _geojson_response(filename: str, features: Iterator[dict]) -> StreamingRespo
 def _stream_geojson_hotspots(
     stmt, is_preset: bool, geojson_str: str | None = None,
     bbox_only: bool = False, chunk_size: int = 1500,
+    max_rows: int | None = None,
 ) -> Iterator[bytes]:
     db = SessionLocal()
     try:
-        cursor = db.execute(stmt)
+        cursor = db.execute(stmt.execution_options(stream_results=True, yield_per=chunk_size))
         yield b'{"type":"FeatureCollection","features":[\n'
         first = True
         batch: list[str] = []
@@ -88,12 +127,13 @@ def _stream_geojson_hotspots(
             from ..geometry import points_in_polygon
             import numpy as np
 
+        matched = 0
         for r in cursor:
-            lon = round(float(r[0]), 5)
-            lat = round(float(r[1]), 5)
+            raw_lon, raw_lat = float(r[0]), float(r[1])
             if ring is not None:
-                if not points_in_polygon(np.array([lon]), np.array([lat]), ring)[0]:
+                if not points_in_polygon(np.array([raw_lon]), np.array([raw_lat]), ring)[0]:
                     continue
+            lon, lat = round(raw_lon, 5), round(raw_lat, 5)
 
             dt_str = r[4].isoformat() if hasattr(r[4], "isoformat") else str(r[4])
             d_str = r[5].isoformat() if hasattr(r[5], "isoformat") else str(r[5])
@@ -117,11 +157,14 @@ def _stream_geojson_hotspots(
                 },
             }
             batch.append(json.dumps(feat, separators=(",", ":")))
+            matched += 1
             if len(batch) >= chunk_size:
                 prefix = b"" if first else b",\n"
                 yield prefix + (",\n".join(batch)).encode("utf-8")
                 batch = []
                 first = False
+            if max_rows is not None and matched >= max_rows:
+                break
         if batch:
             prefix = b"" if first else b",\n"
             yield prefix + (",\n".join(batch)).encode("utf-8")
@@ -133,16 +176,17 @@ def _stream_geojson_hotspots(
 def _stream_csv_hotspots(
     stmt, is_preset: bool, geojson_str: str | None = None,
     bbox_only: bool = False, chunk_size: int = 4000,
+    max_rows: int | None = None,
 ) -> Iterator[bytes]:
     db = SessionLocal()
     try:
-        cursor = db.execute(stmt)
-        header = (
-            "local_date,acq_dt_utc,sensor,satellite,resolution_m,lat,lon,frp_mw,"
-            "t4_k,t11_k,confidence,daynight,scan_km,track_km,pixel_area_km2,saturated,"
-            "band21_fallback,static_source,source_version\n"
-        )
-        yield header.encode("utf-8")
+        cursor = db.execute(stmt.execution_options(stream_results=True, yield_per=chunk_size))
+        yield _csv_line([
+            "local_date", "acq_dt_utc", "sensor", "satellite", "resolution_m",
+            "lat", "lon", "frp_mw", "t4_k", "t11_k", "confidence", "daynight",
+            "scan_km", "track_km", "pixel_area_km2", "saturated",
+            "band21_fallback", "static_source", "source_version",
+        ])
         batch: list[str] = []
 
         ring = None
@@ -151,12 +195,13 @@ def _stream_csv_hotspots(
             from ..geometry import points_in_polygon
             import numpy as np
 
+        matched = 0
         for r in cursor:
-            lon = round(float(r[0]), 5)
-            lat = round(float(r[1]), 5)
+            raw_lon, raw_lat = float(r[0]), float(r[1])
             if ring is not None:
-                if not points_in_polygon(np.array([lon]), np.array([lat]), ring)[0]:
+                if not points_in_polygon(np.array([raw_lon]), np.array([raw_lat]), ring)[0]:
                     continue
+            lon, lat = round(raw_lon, 5), round(raw_lat, 5)
 
             dt_str = r[4].isoformat() if hasattr(r[4], "isoformat") else str(r[4])
             d_str = r[5].isoformat() if hasattr(r[5], "isoformat") else str(r[5])
@@ -165,16 +210,19 @@ def _stream_csv_hotspots(
             pa_str = f"{float(r[11]):.4f}" if r[11] is not None else ""
             scan_str = f"{float(r[16]):.2f}" if r[16] is not None else ""
             track_str = f"{float(r[17]):.2f}" if r[17] is not None else ""
-            row_str = (
-                f"{d_str},{dt_str},{r[2]},{r[3]},{r[15]},"
-                f"{lat:.5f},{lon:.5f},{float(r[6]):.2f},{t4_str},{t11_str},"
-                f"{r[9]},{r[10]},{scan_str},{track_str},"
-                f"{pa_str},{r[12]},{r[13]},{r[14]},{r[18] or ''}"
-            )
-            batch.append(row_str)
+            row = _csv_line([
+                d_str, dt_str, r[2], r[3], r[15], f"{lat:.5f}", f"{lon:.5f}",
+                f"{float(r[6]):.2f}" if r[6] is not None else "", t4_str, t11_str,
+                r[9], r[10], scan_str, track_str, pa_str, r[12], r[13], r[14],
+                r[18] or "",
+            ]).decode("utf-8").rstrip("\n")
+            batch.append(row)
+            matched += 1
             if len(batch) >= chunk_size:
                 yield ("\n".join(batch) + "\n").encode("utf-8")
                 batch = []
+            if max_rows is not None and matched >= max_rows:
+                break
         if batch:
             yield ("\n".join(batch) + "\n").encode("utf-8")
     finally:
@@ -204,9 +252,15 @@ def export(
 
     eff_start = start or start_date
     eff_end = end or end_date
+    if eff_start is not None and eff_end is not None and eff_start > eff_end:
+        raise HTTPException(422, "start must be on or before end")
     fname = f"embereye_{aoi}_{level}_{eff_start or 'start'}_{eff_end or 'end'}.{format}".replace(":", "")
 
     if level == "hotspots":
+        total = _count_hotspot_export(
+            db, a, eff_start, eff_end, sensor, satellite, confidence,
+            daynight, min_frp, hide_static,
+        )
         cols = [
             Hotspot.lon, Hotspot.lat, Hotspot.sensor_family, Hotspot.satellite,
             Hotspot.acq_dt_utc, Hotspot.local_date, Hotspot.frp_mw,
@@ -219,18 +273,39 @@ def export(
         stmt = _apply_common(stmt, a, eff_start, eff_end, sensor, satellite, confidence, daynight, min_frp)
         if hide_static:
             stmt = stmt.where(Hotspot.static_source.is_(False))
-        stmt = stmt.order_by(Hotspot.local_date, Hotspot.id).limit(500_000)
+        stmt = stmt.order_by(Hotspot.local_date, Hotspot.id)
+        # Preset rows can be limited in SQL. Custom AOIs must scan candidates
+        # until the output cap AFTER exact polygon filtering.
+        if a.is_preset:
+            stmt = stmt.limit(HOTSPOT_EXPORT_LIMIT)
+        headers = {
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "X-Export-Truncated": str(total > HOTSPOT_EXPORT_LIMIT).lower(),
+            "X-Export-Total": str(total),
+            "X-Export-Total-Exact": "true",
+            "X-Export-Limit": str(HOTSPOT_EXPORT_LIMIT),
+            "X-Result-Truncated": str(total > HOTSPOT_EXPORT_LIMIT).lower(),
+            "X-Result-Total": str(total),
+            "X-Result-Limit": str(HOTSPOT_EXPORT_LIMIT),
+            "X-Result-Total-Exact": "true",
+        }
 
         if format == "geojson":
             return StreamingResponse(
-                _stream_geojson_hotspots(stmt, a.is_preset, a.geojson, getattr(a, "bbox_only", False)),
+                _stream_geojson_hotspots(
+                    stmt, a.is_preset, a.geojson,
+                    getattr(a, "bbox_only", False), max_rows=HOTSPOT_EXPORT_LIMIT,
+                ),
                 media_type="application/geo+json",
-                headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+                headers=headers,
             )
         return StreamingResponse(
-            _stream_csv_hotspots(stmt, a.is_preset, a.geojson, getattr(a, "bbox_only", False)),
+            _stream_csv_hotspots(
+                stmt, a.is_preset, a.geojson,
+                getattr(a, "bbox_only", False), max_rows=HOTSPOT_EXPORT_LIMIT,
+            ),
             media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+            headers=headers,
         )
 
     if level == "daily":

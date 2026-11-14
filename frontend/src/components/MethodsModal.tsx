@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { MethodsResponse } from "../api/types";
 import { useStore } from "../store";
-import { EMBEREYE_LOGO_DATA_URI } from "../assets/logoData";
+import { EMBEREYE_LOGO_SRC } from "../assets/logo";
 
 export default function MethodsModal() {
   const open = useStore((s) => s.methodsOpen);
@@ -11,28 +11,63 @@ export default function MethodsModal() {
   const aoiId = useStore((s) => s.aoiId);
   const meta = useStore((s) => s.meta);
   const [methods, setMethods] = useState<MethodsResponse | null>(null);
+  const [methodsLoading, setMethodsLoading] = useState(false);
+  const [methodsError, setMethodsError] = useState<string | null>(null);
+  const [methodsRetry, setMethodsRetry] = useState(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (!open) {
-      setMethods(null);
-      return;
-    }
-    let alive = true;
-    setMethods(null);
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!open) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     closeRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusables = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      ) ?? []);
+      if (!focusables.length) {
+        event.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
-    if (aoiId) api.methods(aoiId).then((data) => alive && setMethods(data)).catch(() => alive && setMethods(null));
     return () => {
-      alive = false;
       window.removeEventListener("keydown", onKey);
-      previousFocus?.focus();
+      returnFocusRef.current?.focus();
+      returnFocusRef.current = null;
     };
-  }, [open, aoiId]);
+  }, [open, setOpen]);
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setMethods(null);
+    setMethodsError(null);
+    setMethodsLoading(Boolean(aoiId));
+    if (!aoiId) return () => { alive = false; };
+    api.methods(aoiId)
+      .then((data) => { if (alive) setMethods(data); })
+      .catch((error) => { if (alive) setMethodsError((error as Error).message); })
+      .finally(() => { if (alive) setMethodsLoading(false); });
+    return () => { alive = false; };
+  }, [open, aoiId, methodsRetry]);
 
   if (!open) return null;
   return (
@@ -46,11 +81,13 @@ export default function MethodsModal() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="methods-modal-title"
+        ref={dialogRef}
+        tabIndex={-1}
       >
         <div className="mb-5 flex items-center justify-between border-b border-basalt-300 pb-3">
           <div className="flex items-center gap-3.5">
             <img
-              src={EMBEREYE_LOGO_DATA_URI}
+              src={EMBEREYE_LOGO_SRC}
               alt="EmberEye Project Logo"
               className="h-11 w-11 rounded-xl object-contain ring-1 ring-white/10 shadow"
             />
@@ -78,6 +115,15 @@ export default function MethodsModal() {
             ✕ CLOSE
           </button>
         </div>
+
+        {!meta && <p role="status" className="mb-4 text-xs text-pewter">Loading application methodology…</p>}
+        {methodsLoading && <p role="status" className="mb-4 text-xs text-pewter">Loading AOI calibration and limitations…</p>}
+        {methodsError && (
+          <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-coral/40 bg-coral/10 p-3 text-xs text-alabaster">
+            <span>AOI methods could not be loaded: {methodsError}</span>
+            <button type="button" onClick={() => setMethodsRetry((attempt) => attempt + 1)} className="rounded-lg border border-coral/60 px-3 py-1.5 font-semibold text-coral hover:bg-coral/10">Retry methods</button>
+          </div>
+        )}
 
         {meta && (
           <>

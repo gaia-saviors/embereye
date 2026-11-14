@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/embereye-logo.png" width="130" alt="EmberEye Logo" />
+<img src="frontend/public/embereye-mark.png" width="130" alt="EmberEye satellite-fire logo" />
 
 # EmberEye
 
@@ -13,15 +13,17 @@ for 2000–2026.
 [![CI](https://github.com/3lyly0/embereye-spaceapps/actions/workflows/ci.yml/badge.svg)](https://github.com/3lyly0/embereye-spaceapps/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.162-009688.svg)](https://fastapi.tiangolo.com/)
 [![React 18](https://img.shields.io/badge/React-18-61DAFB.svg)](https://react.dev/)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com/)
 [![GHCR](https://img.shields.io/badge/container-GHCR-2496ED.svg)](https://github.com/users/3lyly0/packages/container/package/embereye-backend)
 
-**NASA Space Apps Challenge 2026** · Cairo, Egypt  
+**NASA Space Apps Challenge 2026** · Cairo, Egypt · [Official challenge brief](https://www.spaceappschallenge.org/2026/challenges/modis-and-viirs-hot-spots/)<br />
 **Team:** Gaia Saviors · **Challenge:** *Harmonization of MODIS and VIIRS Hot Spots*
 
 </div>
+
+> **Data note — not an operational alert or forecast service.** The downloadable `v1.0.8` archive contains **171,855 real NASA FIRMS detections for the Nile Delta** and deterministic synthetic seed records for the other preset AOIs. The MODIS-only pre-2012 segment is a calibrated, model-dependent transfer into VIIRS-equivalent units, not direct VIIRS observations. The app labels provenance and uncertainty; do not interpret the seed or harmonized estimate as a real-time warning.
 
 ---
 
@@ -55,8 +57,9 @@ scrutiny rather than screenshot appeal.
   VIIRS-forward period.
 
 ### Geospatial map (`/map`)
-- MapLibre GL rendering of **171,000+ real FIRMS detections** with
-  FRP-proportional markers and per-sensor colours.
+- MapLibre GL rendering of the selected AOI's **FIRMS or clearly labelled seed
+  detections**, with FRP-proportional markers and per-sensor colours. The Nile
+  Delta snapshot is real FIRMS; other preset regions use synthetic demo seed.
 - Temporal scrubber with playback speeds (1/3/7-day steps), pause, and seek.
 - AOI engine: draw a polygon on satellite imagery or enter a lat/lon bbox;
   the backend harmonizes the selected area on demand.
@@ -71,11 +74,12 @@ scrutiny rather than screenshot appeal.
   and centroid.
 
 ### Streaming export (`/api/export`)
-- Zero-memory chunked `StreamingResponse` (TTFB < 20 ms measured).
-- Harmonized daily CSV, raw hotspots CSV, and RFC 7946 GeoJSON with the
-  active query filters applied.
+- Hotspot CSV and RFC 7946 GeoJSON use chunked database cursors and streaming
+  responses, with a 500,000-detection safety cap.
+- Harmonized daily, daily-aggregate, and episode exports are filterable by AOI
+  and date. Hotspot responses include exact total/truncation headers.
 
-### Six real-world AOI presets
+### Six AOI presets
 
 | Preset | Region | Fire regime |
 |---|---|---|
@@ -85,6 +89,25 @@ scrutiny rather than screenshot appeal.
 | `borneo-peatlands` | Central Kalimantan, Indonesia | Smouldering peat fires, ENSO-correlated |
 | `pantanal-brazil` | Pantanal, Brazil | Cerrado–wetland dry-season burning |
 | `mediterranean-greece` | Aegean & mainland Greece | Heatwave mega-fires |
+
+---
+
+## How EmberEye addresses the challenge
+
+The challenge asks for a consistent MODIS–VIIRS burning-activity calendar and
+a web app for exploring a region and time span, comparing patterns and unusual
+periods, and downloading analysis. EmberEye follows that shape directly:
+
+- It normalizes the two FIRMS product families and estimates MODIS activity in
+  VIIRS-equivalent units using the measured overlap period; it does not invent
+  pre-launch VIIRS observations.
+- It shows the long record as daily/monthly calendars, a geospatial map, and
+  time-series/season/episode analyses with range and AOI selection.
+- It preserves platform, product, provisional NRT status, and uncertainty so
+  sensor transitions and estimated eras remain visible to the user.
+- It exports the filtered observations and derived series for downstream use.
+- Deterministic synthetic rows are demo fixtures only and are never presented
+  as NASA FIRMS observations.
 
 ---
 
@@ -117,7 +140,7 @@ scrutiny rather than screenshot appeal.
 ```
 
 **Stack:** FastAPI · Python 3.11 · SQLAlchemy 2.0 · Pydantic v2 · NumPy · SciPy ·
-React 18 · TypeScript 5.6 · Vite 5 · Tailwind CSS · Zustand · MapLibre GL ·
+React 18 · TypeScript 5.6 · Vite 8 · Tailwind CSS · Zustand · MapLibre GL ·
 Apache ECharts · PostgreSQL 16 / SQLite · Docker Compose · GitHub Actions.
 
 ---
@@ -191,20 +214,29 @@ The pre-2012 segment is **model-dependent**: the transfer is assumed stationary
 back to 2000 because no VIIRS observation exists before 2012. MCD64A1 burned
 area can corroborate seasonality but is not ingested. These limitations are
 also exposed at runtime through `GET /api/analytics/methods`; see
-[`docs/AUDIT_REAL.md`](docs/AUDIT_REAL.md) for the real-data audit.
+[`docs/AUDIT_REAL.md`](docs/AUDIT_REAL.md) for the real-data audit. EmberEye is
+not a fire-spread model, operational early-warning system, or substitute for
+official incident information. NASA FIRMS NRT observations are provisional and
+may be revised when standard products become available.
 
 ---
 
 ## Space agency data used
 
-EmberEye uses **open NASA data only**. There is no ESA, JAXA, or commercial
-imagery in this release. Full provenance, terms, and required citations live in
+Real satellite observations ingested by EmberEye come from **NASA FIRMS**.
+Offline/demo mode can also generate clearly labelled synthetic records; those
+are not NASA observations. This release does not ingest ESA, JAXA, or commercial
+imagery. Full provenance, terms, and required citations live in
 [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
 
 | Source | Product | Platforms | Resolution |
 |---|---|---|---|
 | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov) | MODIS Collection 6.1 active fire (`MODIS_SP` / `_NRT`) | Terra, Aqua | 1 km |
-| [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov) | VIIRS 375 m active fire (`VIIRS_*_SP` / `_NRT`) | Suomi-NPP, NOAA-20, NOAA-21 | 375 m |
+| [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov) | VIIRS 375 m active fire (`VIIRS_SNPP_SP`; NOAA-20/21 `SP` and `NRT`) | Suomi-NPP (historical), NOAA-20, NOAA-21 | 375 m |
+
+NASA states that new Suomi-NPP data delivery ceased at 13:00 UTC on 2 November
+2026. Historical S-NPP products remain available; the live NRT path uses
+NOAA-20 and NOAA-21 instead. See [NASA's FIRMS transition note](https://www.earthdata.nasa.gov/news/blog/transitioning-from-suomi-npp-viirs-omps-what-firms-users-need-know).
 
 **Required citations**
 
@@ -220,9 +252,12 @@ imagery in this release. Full provenance, terms, and required citations live in
 EmberEye can run entirely offline on a **deterministic, calibrated seed
 archive** that exercises the full ingest → dedup → harmonize → serve pipeline.
 Synthetic rows carry an empty `firms_product`; real rows carry `SP`/`NRT`.
-`GET /api/meta` reports `FIRMS_ARCHIVE`, `SEED`, or `MIXED`, and the UI shows
-the same badge. Raw agency archives are **not committed**; regenerate them
-with `scripts/backfill_firms.py` and your own free `FIRMS_MAP_KEY`.
+`GET /api/meta` reports `FIRMS_ARCHIVE`, `SYNTHETIC_SEED`, `MIXED`, or `EMPTY`,
+and the UI shows the same provenance. The v1.0.8 offline release is mixed: the
+Nile Delta is real FIRMS and the other preset AOIs are synthetic. Raw agency
+archives are **not committed**; regenerate them with `scripts/backfill_firms.py`
+and your own free `FIRMS_MAP_KEY`. `SEED` is synthetic; `LIVE` fails loudly if
+FIRMS cannot be reached instead of silently substituting demo data.
 
 ---
 
@@ -246,10 +281,12 @@ embereye/
 ├── scripts/                 # backfill, audit, LOYO evaluation, DB migration
 ├── tests/                   # pytest suite (pipeline, phase 2, v1.06/v1.07)
 ├── docs/                    # methodology, ADRs, data provenance, audit, backup
-├── assets/                  # brand assets
+├── frontend/public/         # shared app mark and favicon assets
 ├── .github/workflows/       # CI tests/build · tag-triggered GHCR publish
 ├── docker-compose.yml       # PostgreSQL + seeder + backend + nginx SPA
-├── docker-compose.sqlite.yml# override: serve a host SQLite archive
+├── docker-compose.public.yml       # public read-only PostgreSQL profile
+├── docker-compose.sqlite.yml       # local read-write host-SQLite profile
+├── docker-compose.sqlite.public.yml # public read-only SQLite profile
 ├── Makefile · .env.example · LICENSE · CITATION.cff
 ```
 
@@ -263,7 +300,7 @@ Dockerfiles, CI caches, and relative imports.
 ## Local setup
 
 ### Prerequisites
-Docker Desktop (recommended), or Python **3.11** + Node **20** for a local run.
+Docker Desktop (recommended), or Python **3.11** + Node **22.12+** for a local run.
 No API key is required: the stack starts on the labelled seed archive.
 The template defaults are for local/demo use; do not expose them unchanged on a public host.
 
@@ -283,7 +320,7 @@ git clone https://github.com/3lyly0/embereye-spaceapps.git
 cd embereye-spaceapps
 cp .env.example .env
 # Optional: pin an exact release; omit to use the latest published tag.
-echo 'EMBEREYE_IMAGE_TAG=v1.0.10' >> .env
+echo 'EMBEREYE_IMAGE_TAG=v1.1.0' >> .env
 # While the packages are private, log in with a classic PAT (read:packages).
 # Omit this command after both GHCR packages have been made Public.
 docker login ghcr.io -u 3lyly0
@@ -360,7 +397,7 @@ This mounts the file read-write, disables the seeder, and switches SQLite to
 # Backend
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt pytest httpx
+pip install -r backend/requirements-dev.txt
 
 cd backend
 python -m app.seed_run
@@ -442,7 +479,11 @@ Methodological anchors beyond the FIRMS product papers include Zheng et al.
 Su & Yu (2026), and Jolly et al. (2015) — the full registry is in
 `backend/app/harmonize/pipeline.py` and exposed at `/api/analytics/methods`.
 
-**AI Usage Disclosure:** In compliance with hackathon guidelines, we disclose the use of AI coding assistants. AI has become an integral part of our daily lives and modern development workflows. When used wisely as a collaborative tool—to accelerate boilerplate code, UI styling, and documentation—it is a highly beneficial asset, not a detriment. It allowed our team to focus our human effort entirely on the complex scientific methodology and core harmonization architecture, which remain our original work.
+**AI use disclosure:** AI-assisted tools contributed to implementation, debugging,
+tests, documentation, and the EmberEye logo concept. The team remains responsible
+for reviewing the generated changes, scientific assumptions, data provenance,
+and final interpretation. AI is not used to invent or relabel observations as
+NASA measurements.
 
 ---
 
@@ -461,7 +502,7 @@ If you use EmberEye, please cite the repository using
   author  = {{Team Gaia Saviors}},
   title   = {EmberEye: Harmonization of MODIS and VIIRS Hot Spots},
   year    = {2026},
-  version = {1.0.10},
+  version = {1.1.0},
   license = {MIT},
   url     = {https://github.com/3lyly0/embereye-spaceapps}
 }

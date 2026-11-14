@@ -184,7 +184,9 @@ def generate_aoi_records(
                 # mirroring the MODIS Terra/Aqua day+night schedule.
                 for sat in VIIRS_SATELLITES:
                     if sat == "SNPP" and (det_day < date(2012, 1, 20) or det_day >= date(2026, 11, 1)):
-                        continue  # S-NPP record: 2012-01-20 to 2026-10-31
+                        # Conservative demo-only cutoff; NASA's actual end of
+                        # new S-NPP data delivery was 2026-11-02 13:00 UTC.
+                        continue  # Synthetic S-NPP window ends 2026-10-31
                     if sat == "N20" and det_day < date(2018, 4, 1):
                         continue
                     if sat == "N21" and det_day < N21_START:
@@ -333,7 +335,7 @@ def _static_sources(
                 # --- VIIRS pass ---
                 if d >= date(2012, 1, 20):
                     if d >= date(2026, 11, 1):
-                        sat = "N20"  # S-NPP NRT ceased (FIRMS notice)
+                        sat = "N20"  # Demo-only handoff starts early; see cutoff note above.
                     elif d >= date(2018, 4, 1):
                         sat = "SNPP" if rng.random() < 0.5 else "N20"
                     else:

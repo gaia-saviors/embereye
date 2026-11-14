@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
+import maplibreWorkerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
+import type { Map as MlMap, MapLayerMouseEvent, StyleSpecification } from "maplibre-gl";
 
 import { api } from "../api/client";
 import type {
@@ -16,6 +18,11 @@ import {
   featuresForDay,
   type SnapshotData,
 } from "../lib/snapshot";
+
+// Vite emits the MapLibre module worker as a hashed same-origin asset. Without
+// an explicit URL, the split production bundle resolves a missing sibling
+// worker path and MapLibre silently leaves the map without rendered layers.
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 type BasemapId = "dark" | "sat" | "osm";
 
@@ -141,6 +148,7 @@ export default function MapView() {
   const [rawTruncated, setRawTruncated] = useState(false);
   const [loading, setLoading] = useState(false);
   const [archiveErr, setArchiveErr] = useState<string | null>(null);
+  const [archiveRetry, setArchiveRetry] = useState(0);
   const [showGibs, setShowGibs] = useState(false);
   const [showHeat, setShowHeat] = useState(false);
   const [basemap, setBasemap] = useState<BasemapId>(loadBasemap);
@@ -272,7 +280,7 @@ export default function MapView() {
         paint: { "line-color": "#E04F33", "line-width": 2, "line-dasharray": [3, 2] },
       });
 
-      map.on("click", "hs-circle", (e) => {
+      map.on("click", "hs-circle", (e: MapLayerMouseEvent) => {
         if (drawModeRef.current === "polygon") return;
         const f = e.features?.[0];
         if (!f) return;
@@ -285,7 +293,7 @@ export default function MapView() {
           .setLngLat((f.geometry as unknown as { coordinates: [number, number] }).coordinates)
           .setHTML(
             `<b style="color:${p.sensor === "MODIS" ? SENSOR_COLOR.MODIS : SENSOR_COLOR.VIIRS}">${sensor} · ${satellite}</b><br>` +
-              `<span style="font-family:JetBrains Mono,monospace;font-size:11px;">${acqDate} UTC</span><br>` +
+              `<span style="font-family:ui-monospace,monospace;font-size:11px;">${acqDate} UTC</span><br>` +
               `FRP: <b>${p.frp_mw == null ? "—" : Number(p.frp_mw).toFixed(1)} MW</b> · ` +
               `T4: <b>${p.t4_k == null ? "—" : Number(p.t4_k).toFixed(0)} K</b><br>` +
               `Conf: ${confidence} · ${p.daynight === "D" ? "Day" : "Night"}` +
@@ -353,6 +361,7 @@ export default function MapView() {
     setRawTruncated(false);
     const cached = snapCache.get(attrKey);
     if (cached) {
+      setLoading(false);
       setSnap(cached);
       setSnapRedirect(null);
       setGrid(null);
@@ -387,7 +396,7 @@ export default function MapView() {
     return () => {
       alive = false;
     };
-  }, [aoiId, mapReady, attrKey, setMapToast]);
+  }, [aoiId, mapReady, attrKey, setMapToast, archiveRetry]);
 
   useEffect(() => {
     if (!snap) return;
@@ -404,6 +413,7 @@ export default function MapView() {
     if (!aoiId || !mapReady || snap || !snapRedirect) return;
     let alive = true;
     setLoading(true);
+    setArchiveErr(null);
     setGrid(null);
     setRawFeat([]);
     setRawTotal(0);
@@ -442,7 +452,7 @@ export default function MapView() {
     return () => {
       alive = false;
     };
-  }, [aoiId, mapReady, snap, snapRedirect, gridRes, gridPeriod.start, gridPeriod.end, filters]);
+  }, [aoiId, mapReady, snap, snapRedirect, gridRes, gridPeriod.start, gridPeriod.end, filters, archiveRetry]);
 
   // Viewport tracking for grid mode
   const [viewTick, setViewTick] = useState(0);
@@ -498,6 +508,7 @@ export default function MapView() {
     const ac = new AbortController();
     const t = window.setTimeout(() => {
       const bounds = map.getBounds();
+      setArchiveErr(null);
       api
         .hotspots({
           aoi: aoiId,
@@ -521,14 +532,14 @@ export default function MapView() {
           src?.setData({ type: "FeatureCollection", features: feats });
         })
         .catch((e) => {
-          if ((e as Error).name !== "AbortError") setMapToast(`Hotspots unavailable: ${(e as Error).message}`);
+          if ((e as Error).name !== "AbortError") setArchiveErr((e as Error).message);
         });
     }, 200);
     return () => {
       window.clearTimeout(t);
       ac.abort();
     };
-  }, [snap, grid, aoiId, mapReady, gridPeriod.start, gridPeriod.end, filters, viewTick, setMapToast]);
+  }, [snap, grid, aoiId, mapReady, gridPeriod.start, gridPeriod.end, filters, viewTick, setMapToast, archiveRetry]);
 
   // GIBS overlay
   useEffect(() => {
@@ -910,12 +921,24 @@ export default function MapView() {
 
       {/* Error Toast */}
       {archiveErr && (
-        <button
-          onClick={() => setArchiveErr(null)}
-          className="absolute bottom-20 left-1/2 z-20 max-w-[80%] -translate-x-1/2 truncate rounded-xl border border-coral/50 bg-basalt-100/95 px-5 py-2.5 text-xs text-coral shadow-2xl backdrop-blur font-medium"
-        >
-          Hotspots error: {archiveErr} <span className="ml-2 text-muted">(Click to dismiss)</span>
-        </button>
+        <div role="alert" className="absolute bottom-20 left-1/2 z-20 flex max-w-[92vw] -translate-x-1/2 items-center gap-2 rounded-xl border border-coral/50 bg-basalt-100/95 px-3 py-2.5 text-xs text-coral shadow-2xl backdrop-blur sm:max-w-xl">
+          <span className="min-w-0 flex-1">Map data unavailable: {archiveErr}</span>
+          <button
+            type="button"
+            onClick={() => { setArchiveErr(null); setArchiveRetry((attempt) => attempt + 1); }}
+            className="shrink-0 rounded-md border border-coral/50 px-2 py-1 font-semibold hover:bg-coral/10"
+          >
+            Retry
+          </button>
+          <button
+            type="button"
+            onClick={() => setArchiveErr(null)}
+            aria-label="Dismiss map error"
+            className="shrink-0 px-1 text-muted hover:text-alabaster"
+          >
+            ×
+          </button>
+        </div>
       )}
 
     </div>

@@ -1,51 +1,47 @@
 # Public deployment
 
-This guide is a minimal single-Linux-host deployment for the GHCR images. It is not a cloud-provider-specific recipe or a substitute for application security review.
+This guide covers an anonymous, view-only EmberEye demo on one Linux host. It is not a managed hosting recipe or an operational wildfire warning service. Use Docker Compose v2.24 or later because the public overrides use Compose merge tags.
 
-## Before making the project public
+## Before opening the host to visitors
 
-The repository and the two GHCR packages have separate visibility settings. Making the repository public does **not** automatically make the container packages public. Before submission, change the visibility of both `embereye-backend` and `embereye-frontend` to **Public** in their GitHub Packages settings. Public GHCR container packages can then be pulled anonymously. While a package remains private, use a classic GitHub PAT with `read:packages` to pull it. [1] [2]
+GitHub repository visibility and GHCR package visibility are separate. When you are ready to publish, make the repository public and set both `embereye-backend` and `embereye-frontend` packages to **Public** in GitHub Packages. A public package can be pulled anonymously; a private package needs a classic GitHub PAT with `read:packages`. [1] [2]
 
-The application has no user accounts. For a public view-only demo, set `PUBLIC_READ_ONLY=true`: the backend rejects `POST`, `PUT`, `PATCH`, and `DELETE` requests under `/api` with HTTP 403, and the UI labels the demo and disables AOI creation/deletion and live fetch. The frontend Nginx also limits `/api` to 20 requests/second per client, with a burst of 40. In this Caddy setup, Caddy sanitizes and sets `X-Forwarded-For` by default; Nginx uses that value for the limiter. [5]
+The app has no user accounts. The public profile forces `PUBLIC_READ_ONLY=true`, rejects API writes, disables write controls in the UI, does not publish the FastAPI port, and binds the frontend only to loopback for Caddy. Nginx limits `/api/` to 20 requests per second per client with a burst of 40. The documented Caddy proxy sanitizes `X-Forwarded-For`, which Nginx uses for that limit. Nginx also sends `nosniff`, frame, referrer, and permissions headers. Content Security Policy is currently **report-only**, not enforced, until MapLibre and ECharts violations are reviewed after deployment. Read-only does not prevent resource exhaustion from expensive GET requests; use a host firewall and, for a large audience, an edge WAF or CDN. Do not expose Docker, PostgreSQL, or the backend port to the internet. [5]
 
-Read-only mode still has no login and does not prevent excessive read traffic. Keep the documented reverse-proxy setup, retain the rate limit, and add an edge firewall/WAF if the host or audience needs stronger protection. Do not turn `PUBLIC_READ_ONLY` off on an unauthenticated public deployment.
+The v1.0.8 offline archive is mixed: 171,855 real NASA FIRMS detections for the Nile Delta and synthetic demo rows for the other AOIs. The MODIS-only period before VIIRS is model-dependent. FIRMS NRT observations are provisional. EmberEye is not a forecast or authoritative incident-alert system; preserve the in-app provenance and uncertainty labels.
 
-## Deploy the seeded demo on one Linux host
+## PostgreSQL seeded demo
 
-Use a Linux host with Docker Engine and the Compose plugin. Point a DNS name such as `fire.example.org` to the host, install Caddy using its [official instructions](https://caddyserver.com/docs/install), and allow inbound TCP ports 80 and 443 for HTTPS. [3] [4]
+Point a DNS name, for example `fire.example.org`, to the Linux host. Install Docker Engine with the Compose plugin and Caddy using its [official instructions](https://caddyserver.com/docs/install). Allow inbound TCP ports 80 and 443 only. [3] [4]
 
-After the repository and GHCR packages are public, clone the repository and prepare the local environment file:
+Once the selected GHCR release has been published, clone the repository and prepare the public environment file:
 
 ```bash
 git clone https://github.com/3lyly0/embereye-spaceapps.git
 cd embereye-spaceapps
-cp .env.example .env
+cp .env.public.example .env
 openssl rand -hex 32
 ```
 
-Edit `.env` and set a unique `POSTGRES_PASSWORD` to the generated value. Also set these production values:
+Edit `.env`: set `POSTGRES_PASSWORD` to the generated secret, set `PUBLIC_CORS_ORIGINS` to the exact HTTPS origin (for example `https://fire.example.org`, with no trailing slash), keep `DATA_MODE=SEED`, and pin `EMBEREYE_IMAGE_TAG` to the release you actually published. Do not copy the development `.env.example` values to a public host, and never commit `.env`.
 
-```dotenv
-EMBEREYE_IMAGE_TAG=v1.0.10
-DATA_MODE=SEED
-PUBLIC_READ_ONLY=true
-BACKEND_PORT=127.0.0.1:8000
-FRONTEND_PORT=127.0.0.1:8080
-POSTGRES_PORT=127.0.0.1:5432
-```
-
-Keep `.env` on the host; never commit it. The loopback bindings leave only the reverse proxy internet-facing. `DATA_MODE=SEED` starts the deterministic demo archive. Without `FIRMS_MAP_KEY`, those seeded records are synthetic and are labelled as such in the application; they are not NASA observations.
-
-Pull and start the pinned images:
+Validate the merged configuration, then pull and start the images:
 
 ```bash
-docker compose pull
-docker compose up -d --no-build
-docker compose ps
-curl -fsS http://127.0.0.1:8000/api/health
+docker compose -f docker-compose.yml -f docker-compose.public.yml config
+docker compose -f docker-compose.yml -f docker-compose.public.yml pull
+docker compose -f docker-compose.yml -f docker-compose.public.yml up -d --wait
+docker compose -f docker-compose.yml -f docker-compose.public.yml ps
+curl -fsS http://127.0.0.1:8080/api/health
 ```
 
-Configure Caddy to proxy the public hostname to the frontend container's host port. Replace the example hostname with the real DNS name:
+The one-shot seeder must finish successfully before the backend starts. The API health check must pass before the frontend starts. If the seed job fails, inspect it rather than bypassing the dependency:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.public.yml logs --tail=150 seeder backend
+```
+
+Configure the host's active Caddyfile to proxy only to the loopback-bound frontend port:
 
 ```caddyfile
 fire.example.org {
@@ -53,48 +49,39 @@ fire.example.org {
 }
 ```
 
-Place that site block in Caddy's active `Caddyfile`, then reload its service:
+Reload Caddy with `sudo systemctl reload caddy`. Caddy obtains and renews HTTPS certificates when DNS points to this host and ports 80/443 are reachable. The public site is `https://fire.example.org`; `/api/` is proxied internally by the frontend Nginx. Do not add a separate public route to FastAPI or PostgreSQL.
 
-```bash
-sudo systemctl reload caddy
-```
+To update later, change `EMBEREYE_IMAGE_TAG` in `.env`, then rerun `pull` and `up -d --wait` with the same two Compose files. Keep the PostgreSQL volume backed up; `docker compose down -v` deletes it.
 
-Caddy can obtain and renew a publicly trusted certificate when the DNS name points to this host and ports 80 and 443 are reachable. [4] The public entry point is `https://fire.example.org`; keep the API docs on the loopback-only backend port.
+## Read-only SQLite archive
 
-To update to a later image release, change `EMBEREYE_IMAGE_TAG` in `.env`, then run:
-
-```bash
-docker compose pull
-docker compose up -d --no-build
-docker compose logs --tail=100 backend seeder
-```
-
-`docker compose down` stops the stack while preserving the named database volume. Avoid `docker compose down -v` unless you intend to delete that database.
-
-## Serve the Nile Delta offline archive
-
-If the public demo should show the real-data snapshot rather than the synthetic seed, download the release asset after the repository is public:
+This option serves the downloadable mixed v1.0.8 archive instead of creating a new synthetic seed. Download it after the repository/release is public:
 
 ```bash
 mkdir -p data
 curl -fL -o data/embereye_dev.db \
   https://github.com/3lyly0/embereye-spaceapps/releases/download/v1.0.8-offline-data/embereye_dev.db
+sha256sum data/embereye_dev.db
 ```
 
-Set the archive path in `.env`:
+If the repository is still private, download the same asset through an authenticated GitHub session; do not put a PAT in the URL or in `.env`. Confirm the checksum against the GitHub Release asset digest before serving the file.
 
-```dotenv
-EMBEREYE_SQLITE_HOST_PATH=./data/embereye_dev.db
-```
-
-Then use the SQLite override for both pull and startup:
+Copy `.env.sqlite.public.example` to `.env`, set `PUBLIC_CORS_ORIGINS` to the exact HTTPS site origin, and confirm `EMBEREBEYE_SQLITE_HOST_PATH` points to the downloaded database. The public SQLite profile mounts the file `:ro`, runs the backend as the unprivileged `embereye` user with a read-only container filesystem, and opens SQLite in URI read-only mode. Public read-only startup deliberately skips schema creation/migrations, so the archive must already be a complete, initialized EmberEye database. Do not use the separate `docker-compose.sqlite.yml` read-write development profile on a public host.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.sqlite.yml pull
-docker compose -f docker-compose.yml -f docker-compose.sqlite.yml up -d --no-build
+# Check that the resolved profile uses a read-only SQLite URL and mount.
+docker compose -f docker-compose.yml -f docker-compose.sqlite.yml \
+  -f docker-compose.sqlite.public.yml config
+
+# Pull and start; only the frontend is bound to 127.0.0.1:8080.
+docker compose -f docker-compose.yml -f docker-compose.sqlite.yml \
+  -f docker-compose.sqlite.public.yml pull
+docker compose -f docker-compose.yml -f docker-compose.sqlite.yml \
+  -f docker-compose.sqlite.public.yml up -d --wait
+curl -fsS http://127.0.0.1:8080/api/health
 ```
 
-The override disables the seeder and mounts the SQLite file read-write. Back up the file before deployment and do not replace it while the service is using it. This snapshot contains real NASA FIRMS records for Nile Delta and synthetic demo data for the other preset AOIs; it is not an all-real-data archive.
+Caddy uses the same `reverse_proxy 127.0.0.1:8080` block described above. Keep a separate backup of the SQLite file and replace it only while the stack is stopped.
 
 ## References
 

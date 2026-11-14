@@ -9,12 +9,14 @@ record store).
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
+from ..config import get_settings
 from ..db import SessionLocal, get_db
 from ..geometry import ring_bbox
 from ..models import (
@@ -35,6 +37,59 @@ router = APIRouter()
 
 MAX_POLYGON_VERTICES = 200
 MAX_AREA_DEG2 = 400.0  # ~ 2M km^2 guard rail
+_JOB_CREATION_LOCK = threading.Lock()
+
+
+def _has_spatial_hotspots(db: Session, aoi: Aoi) -> bool:
+    """Return whether any canonical record falls inside this custom polygon."""
+    from ..geometry import points_in_polygon
+    import numpy as np
+
+    ring = json.loads(aoi.geojson)["coordinates"][0]
+    result = db.execute(select(Hotspot.lon, Hotspot.lat).where(
+        Hotspot.lat >= aoi.south, Hotspot.lat <= aoi.north,
+        Hotspot.lon >= aoi.west, Hotspot.lon <= aoi.east,
+    ))
+    while batch := result.fetchmany(50_000):
+        inside = points_in_polygon(
+            np.asarray([r[0] for r in batch]),
+            np.asarray([r[1] for r in batch]), ring,
+        )
+        if bool(inside.any()):
+            return True
+    return False
+
+
+def _recover_interrupted_jobs() -> None:
+    """Fail persisted in-flight jobs at process startup; the in-process task
+    cannot survive a restart, so exposing PENDING/RUNNING forever is misleading.
+    """
+    if get_settings().public_read_only:
+        # Public SQLite archives are mounted read-only and must not be touched
+        # by recovery; a public Postgres demo is also served without API writes.
+        return
+    db = SessionLocal()
+    try:
+        now = utcnow()
+        jobs = db.execute(
+            select(AggregationJob).where(
+                AggregationJob.status.in_(("PENDING", "RUNNING"))
+            )
+        ).scalars().all()
+        for job in jobs:
+            job.status = "FAILED"
+            job.progress = 0.0
+            job.message = "interrupted by service restart; submit a rebuild"
+            job.finished_at = now
+        if jobs:
+            db.commit()
+    finally:
+        db.close()
+
+
+@router.on_event("startup")
+def recover_interrupted_jobs_on_startup() -> None:
+    _recover_interrupted_jobs()
 
 
 def _validate_polygon(geojson: dict) -> tuple[list[list[float]], tuple[float, float, float, float]]:
@@ -95,16 +150,12 @@ def _run_aggregation_job(job_id: str, aoi_id: str) -> None:
             job.message = msg
             db.commit()
 
-        # Spatial coverage validation: check if bounding box has hotspots
-        existing_points = db.scalar(
-            select(func.count(Hotspot.id)).where(
-                (Hotspot.lat >= aoi.south) & (Hotspot.lat <= aoi.north)
-                & (Hotspot.lon >= aoi.west) & (Hotspot.lon <= aoi.east)
-            )
-        ) or 0
+        # Spatial coverage validation uses the actual drawn region, not just
+        # the bounding-box prefilter.
+        existing_points = _has_spatial_hotspots(db, aoi)
 
         # If drawn outside existing archives, dynamically generate calibrated background data
-        if existing_points == 0:
+        if not existing_points:
             progress(0.05, "outside local archive; synthesizing calibrated regional record")
             from ..seed.pipeline import _profile_from_aoi
             from ..seed.synth import generate_aoi_records
@@ -260,18 +311,38 @@ def delete_aoi(aoi_id: str, db: Session = Depends(get_db)) -> None:
 def rebuild_aoi(
     aoi_id: str, background: BackgroundTasks, db: Session = Depends(get_db)
 ) -> JobOut:
-    a = db.get(Aoi, aoi_id)
-    if a is None:
-        raise HTTPException(404, "AOI not found")
-    job_id = uuid.uuid4().hex[:24]
-    job = AggregationJob(id=job_id, aoi_id=aoi_id, status="PENDING", progress=0.0)
-    db.add(job)
-    db.commit()
-    background.add_task(_run_aggregation_job, job_id, aoi_id)
-    return JobOut(
-        id=job.id, aoi_id=job.aoi_id, status="PENDING", progress=0.0, message="",
-        started_at=job.started_at, finished_at=None,
-    )
+    with _JOB_CREATION_LOCK:
+        # Row locking serializes concurrent rebuild requests on PostgreSQL;
+        # the process lock also protects SQLite and single-worker deployments.
+        a = db.execute(
+            select(Aoi).where(Aoi.id == aoi_id).with_for_update()
+        ).scalar_one_or_none()
+        if a is None:
+            raise HTTPException(404, "AOI not found")
+        active = db.execute(
+            select(AggregationJob)
+            .where(
+                AggregationJob.aoi_id == aoi_id,
+                AggregationJob.status.in_(("PENDING", "RUNNING")),
+            )
+            .order_by(AggregationJob.started_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if active is not None:
+            return JobOut(
+                id=active.id, aoi_id=active.aoi_id, status=active.status,
+                progress=active.progress, message=active.message,
+                started_at=active.started_at, finished_at=active.finished_at,
+            )
+        job_id = uuid.uuid4().hex[:24]
+        job = AggregationJob(id=job_id, aoi_id=aoi_id, status="PENDING", progress=0.0)
+        db.add(job)
+        db.commit()
+        background.add_task(_run_aggregation_job, job_id, aoi_id)
+        return JobOut(
+            id=job.id, aoi_id=job.aoi_id, status="PENDING", progress=0.0, message="",
+            started_at=job.started_at, finished_at=None,
+        )
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)

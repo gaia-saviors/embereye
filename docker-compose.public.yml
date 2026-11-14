@@ -1,0 +1,32 @@
+# Public, unauthenticated demo profile. Requires Docker Compose v2.24+ for
+# !reset / !override merge tags. Start with:
+#   docker compose -f docker-compose.yml -f docker-compose.public.yml up -d
+#
+# Caddy on the host must be the only public ingress. Its default reverse_proxy
+# behavior sanitizes X-Forwarded-For before Nginx uses it for per-client limits.
+# Never publish the frontend directly or put an untrusted proxy in this path.
+services:
+  db:
+    environment:
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set a unique strong POSTGRES_PASSWORD in .env}"
+    ports: !reset []
+
+  seeder:
+    environment:
+      DATA_MODE: "SEED"
+
+  backend:
+    environment:
+      DATA_MODE: "SEED"
+      PUBLIC_READ_ONLY: "true"
+      EMBEREBEYE_CORS_ORIGINS: "${PUBLIC_CORS_ORIGINS:?Set PUBLIC_CORS_ORIGINS to the exact public HTTPS origin}"
+    # The browser reaches /api through the frontend proxy. Do not publish the
+    # API separately, even on host loopback, where Nginx limits are bypassed.
+    ports: !reset []
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  frontend:
+    ports: !override
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"

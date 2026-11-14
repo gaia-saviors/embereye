@@ -53,6 +53,15 @@ def create_app() -> FastAPI:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[
+            "X-Result-Truncated",
+            "X-Result-Total",
+            "X-Result-Total-Exact",
+            "X-Result-Limit",
+            "X-Export-Truncated",
+            "X-Export-Total",
+            "X-Export-Limit",
+        ],
     )
     app.include_router(meta.router, prefix="/api", tags=["system"])
     app.include_router(aois.router, prefix="/api", tags=["aois"])
@@ -66,8 +75,15 @@ def create_app() -> FastAPI:
     def _startup() -> None:
         # Say exactly where the data lives (never credentials) - the
         # silent-SQLite-fallback lesson from the v1.0.3 backfill.
-        log.info("database: %s", describe_url(get_settings().database_url))
-        create_all()
+        cfg = get_settings()
+        log.info("database: %s", describe_url(cfg.database_url))
+        if cfg.public_read_only:
+            # The public Compose profile starts only after its one-shot seeder
+            # completes. A prebuilt SQLite archive also already has its schema.
+            # Do not run create_all/ensure_schema on a read-only deployment.
+            log.info("public read-only mode: skipping schema DDL; database must be initialized before startup")
+        else:
+            create_all()
 
     return app
 

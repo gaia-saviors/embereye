@@ -6,9 +6,12 @@ on:
   pull_request:
     branches: [main, master, develop]
 
+permissions:
+  contents: read
+
 jobs:
   backend-tests:
-    name: Backend Test Suite (Python 3.11)
+    name: Backend Tests & pip-audit (Python 3.11)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -19,37 +22,43 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: "backend/requirements.txt"
+          cache-dependency-path: "backend/requirements-dev.txt"
 
-      - name: Install backend dependencies
+      - name: Install backend test dependencies and pip-audit
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt pytest httpx
+          pip install -r backend/requirements-dev.txt pip-audit
+
+      - name: Audit resolved backend runtime and test dependencies
+        run: pip-audit -r backend/requirements-dev.txt
 
       - name: Run pytest test suite
         env:
           PYTHONPATH: backend
           TESTING: "1"
-        run: |
-          pytest tests -v
+        run: pytest tests -v
 
   frontend-build:
-    name: Frontend Typecheck & Build (Node 20)
+    name: Frontend Audit, Typecheck & Build (Node 22)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: "frontend/package-lock.json"
 
       - name: Install dependencies
         working-directory: ./frontend
         run: npm ci
+
+      - name: Audit frontend dependencies
+        working-directory: ./frontend
+        run: npm audit --audit-level=low
 
       - name: TypeScript type checking
         working-directory: ./frontend
@@ -59,40 +68,91 @@ jobs:
         working-directory: ./frontend
         run: npm run build
 
+      - name: Assert MapLibre worker is emitted as a production asset
+        working-directory: ./frontend
+        run: test -n "$(find dist/assets -maxdepth 1 -name 'maplibre-gl-worker-*.mjs' -print -quit)"
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan repository history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
   docker-smoke-test:
-    name: Docker Compose Build & Smoke Test
-    needs: [backend-tests, frontend-build]
+    name: Clean Database Seed & Readiness Smoke Test
+    needs: [backend-tests, frontend-build, secret-scan]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Docker images
-        run: |
-          docker compose build
+      - name: Remove any prior Compose database volume
+        run: docker compose down --volumes --remove-orphans
 
-      - name: Start stack in test mode
+      - name: Validate public deployment Compose overlays
+        env:
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          PUBLIC_CORS_ORIGINS: https://fire.example.org
+          EMBEREBEYE_SQLITE_HOST_PATH: /tmp/embereye-ci-fixture.db
+          EMBEREYE_IMAGE_TAG: v1.1.0
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.public.yml config >/dev/null
+          docker compose -f docker-compose.yml -f docker-compose.sqlite.yml \
+            -f docker-compose.sqlite.public.yml config >/dev/null
+
+      - name: Build Docker images
+        run: docker compose build
+
+      - name: Start stack with a small seed on an empty database
         env:
           SEED_SCALE: "0.05"
-        run: |
-          docker compose up -d
+        run: docker compose up -d
 
-      - name: Healthcheck smoke probe
+      - name: Wait for backend readiness and frontend response
         run: |
-          for i in {1..45}; do
-            if curl -s http://localhost:8000/api/health | grep -q '"status":"ok"'; then
-              echo "FastAPI backend healthy!"
-              curl -s http://localhost:8080 | grep -q "EmberEye" && echo "Frontend healthy!"
+          for i in {1..120}; do
+            if curl -fsS http://127.0.0.1:8000/api/health | grep -q '"status":"ok"'; then
+              echo "FastAPI backend healthy after seed completion."
+              curl -fsS http://127.0.0.1:8080 | grep -q "EmberEye"
+              headers="$(curl -fsSI http://127.0.0.1:8080/)"
+              grep -qi '^X-Content-Type-Options: *nosniff' <<< "$headers"
+              grep -qi '^X-Frame-Options: *DENY' <<< "$headers"
+              grep -qi '^Content-Security-Policy-Report-Only:' <<< "$headers"
               exit 0
             fi
-            echo "Waiting for stack... ($i/45)"
+            echo "Waiting for seed and backend readiness... ($i/120)"
             sleep 2
           done
           echo "Stack health check timed out!"
           docker compose logs
           exit 1
 
+      - name: Assert seeded AOIs and derived data exist after readiness
+        run: |
+          docker compose exec -T backend python - <<'PY'
+          from app.db import SessionLocal
+          from app.models import Aoi, DailyAggregate, HarmonizedDaily
+
+          with SessionLocal() as session:
+              preset_aois = session.query(Aoi).filter(Aoi.is_preset.is_(True)).count()
+              harmonized_rows = session.query(HarmonizedDaily).count()
+              aggregate_rows = session.query(DailyAggregate).count()
+
+          print(f"preset AOIs={preset_aois}; harmonized rows={harmonized_rows}; aggregate rows={aggregate_rows}")
+          assert preset_aois >= 6, f"Expected six preset AOIs, got {preset_aois}"
+          assert harmonized_rows > 0, "Seed completed without harmonized rows"
+          assert aggregate_rows > 0, "Seed completed without daily aggregates"
+          PY
+
       - name: Tear down stack
         if: always()
-        run: |
-          docker compose down -v
+        run: docker compose down --volumes --remove-orphans

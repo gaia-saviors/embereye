@@ -1,0 +1,40 @@
+# Read-only public profile for a prebuilt SQLite archive.
+# Start with:
+#   docker compose -f docker-compose.yml -f docker-compose.sqlite.yml \
+#     -f docker-compose.sqlite.public.yml up -d --wait
+# Requires Docker Compose v2.24+ for !reset / !override.
+# Only the frontend is published on loopback for Caddy. The API is internal.
+services:
+  db:
+    # PostgreSQL is not needed when SQLite is selected; opt in only if desired.
+    profiles: ["postgres"]
+
+  seeder:
+    # docker-compose.sqlite.yml replaces the seed command with a no-op.
+    depends_on: !reset []
+
+  backend:
+    user: "embereye"
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      PUBLIC_READ_ONLY: "true"
+      EMBEREBEYE_CORS_ORIGINS: "${PUBLIC_CORS_ORIGINS:?Set PUBLIC_CORS_ORIGINS to the exact public HTTPS origin}"
+      EMBEREBEYE_DATABASE_URL: sqlite:///file:/data/embereye_dev.db?mode=ro&uri=true
+      EMBEREBEYE_SQLITE_JOURNAL: DELETE
+    depends_on: !override
+      seeder:
+        condition: service_completed_successfully
+    volumes: !override
+      - ${EMBEREBEYE_SQLITE_HOST_PATH:-./embereye_dev.db}:/data/embereye_dev.db:ro
+      - ./scripts:/srv/scripts:ro
+      - ./scripts:/app/scripts:ro
+    ports: !reset []
+
+  frontend:
+    ports: !override
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
+    depends_on: !override
+      backend:
+        condition: service_healthy

@@ -93,6 +93,53 @@ def persist_records(db: Session, run_id: int, records: list[CanonicalRecord]) ->
     return len(records)
 
 
+def replace_firms_nrt_window(
+    db: Session,
+    aoi_id: str,
+    run_id: int,
+    records: list[CanonicalRecord],
+    satellites: set[str],
+    start: date,
+    end: date,
+    clear_synthetic: bool = False,
+) -> tuple[int, int]:
+    """Replace one successfully fetched NRT platform/date window.
+
+    FIRMS rows outside this exact AOI, platform and acquisition-date window
+    (including SP archive rows) are retained. A successful empty CSV therefore
+    removes stale rows for only the requested window. Optionally remove the
+    AOI's synthetic archive in the same transaction when it transitions to
+    real FIRMS data, so synthetic and observed detections are never blended.
+    Returns (rows inserted, synthetic rows removed).
+    """
+    synthetic_removed = 0
+    if clear_synthetic:
+        result = db.execute(
+            delete(Hotspot).where(
+                Hotspot.aoi_id == aoi_id,
+                Hotspot.firms_product == "",
+            )
+        )
+        synthetic_removed = int(result.rowcount or 0)
+    if satellites:
+        db.execute(
+            delete(Hotspot).where(
+                Hotspot.aoi_id == aoi_id,
+                Hotspot.firms_product == "NRT",
+                Hotspot.satellite.in_(sorted(satellites)),
+                Hotspot.acq_date >= start,
+                Hotspot.acq_date <= end,
+            )
+        )
+    for record in records:
+        record.run_id = run_id
+    if records:
+        _bulk_insert(db, records)
+    else:
+        db.commit()
+    return len(records), synthetic_removed
+
+
 def clear_aoi_hotspots(db: Session, aoi_id: str, before: date | None = None) -> None:
     stmt = delete(Hotspot).where(Hotspot.aoi_id == aoi_id)
     if before is not None:

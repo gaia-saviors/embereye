@@ -17,7 +17,9 @@ from ..config import Settings, get_settings
 
 SOURCES_MODIS = ["MODIS_NRT"]
 SOURCES_VIIRS = ["VIIRS_NOAA20_NRT", "VIIRS_NOAA21_NRT"]
-# S-NPP NRT ceased 2026-11-01 (FIRMS notice); archive sources for history:
+# NASA says new S-NPP data delivery ceased at 13:00 UTC on 2026-11-02;
+# historical products remain available. Use NOAA-20/21 for ongoing NRT and
+# the standard S-NPP product only when backfilling historical observations.
 SOURCES_VIIRS_ARCHIVE = ["VIIRS_SNPP_SP"]
 SOURCE_DEFAULTS = {
     "MODIS": SOURCES_MODIS,

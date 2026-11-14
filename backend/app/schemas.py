@@ -234,6 +234,9 @@ class CollectionMeta(BaseModel):
     returned: int
     offset: int
     truncated: bool
+    # True when an AOI scan reached its safety cap; in that case `total` is
+    # the number observed so far, not the exact population.
+    total_is_lower_bound: bool = False
 
 
 # --------------------------------------------------------------------------

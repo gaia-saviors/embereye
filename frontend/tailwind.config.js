@@ -58,9 +58,10 @@ export default {
         paper: "#F4F3F6",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        display: ["Space Grotesk", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "ui-monospace", "Menlo", "Consolas", "monospace"],
+        sans: ["Public Sans", "system-ui", "sans-serif"],
+        display: ["Public Sans", "system-ui", "sans-serif"],
+        brand: ["Source Serif 4", "Georgia", "serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
       },
     },
   },

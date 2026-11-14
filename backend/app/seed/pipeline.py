@@ -4,12 +4,10 @@ Idempotency: a completed seed run for the current SEED_VERSION is detected
 via SystemState and skipped unless FORCE_SEED=1. The seed archive is
 deterministic, so "skip" and "rebuild" converge to the same database.
 
-REAL-DATA GUARD (v1.0.4): when the database already holds real FIRMS rows
-(`hotspots.firms_product` is SP/NRT; synthetic rows carry ""), the seeder
-REFUSES to run - synthetic seeding REPLACES the AOI's rows
-(`replace_aoi_records` wipes first), and the LIVE mode lays a synthetic
-underlay alongside real data. Real rows are never wiped or mixed unless the
-operator passes FORCE_SEED=1 AND EMBEREBEYE_ALLOW_SEED_OVER_REAL=1.
+REAL-DATA GUARD (v1.0.4): SEED refuses to replace or mix synthetic data with
+real FIRMS rows (`hotspots.firms_product` is SP/NRT; synthetic rows carry
+"") unless the operator explicitly passes FORCE_SEED=1 AND
+EMBEREBEYE_ALLOW_SEED_OVER_REAL=1. LIVE never generates a synthetic underlay.
 """
 from __future__ import annotations
 
@@ -18,7 +16,7 @@ import logging
 import math
 import os
 import time
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -91,24 +89,32 @@ def count_real_hotspots(db: Session) -> dict:
 
 
 def decide_mode(db: Session) -> tuple[str, str]:
-    """-> (effective_mode, explanation). Never raises."""
+    """-> (effective_mode, explanation); explicit LIVE misconfiguration raises."""
     cfg = get_settings()
     mode = cfg.data_mode.upper()
     if mode == "SEED":
         return "SEED", "DATA_MODE=SEED: using the deterministic calibrated archive."
     if mode == "LIVE":
         if not cfg.firms_map_key:
-            return "SEED", "DATA_MODE=LIVE but FIRMS_MAP_KEY missing; falling back to seed."
+            raise RuntimeError("DATA_MODE=LIVE requires FIRMS_MAP_KEY; refusing seed fallback.")
         probe = check_key()
-        if not probe.get("reachable", False):
-            return "SEED", f"DATA_MODE=LIVE but FIRMS unreachable ({probe.get('detail')}); seed fallback."
+        detail = probe.get("detail")
+        if not probe.get("reachable", False) or (
+            isinstance(detail, str) and detail.startswith("HTTP ")
+        ):
+            raise RuntimeError(
+                f"DATA_MODE=LIVE requires a reachable FIRMS service; probe failed ({detail})."
+            )
         return "LIVE", "DATA_MODE=LIVE: live FIRMS ingest."
     # AUTO
     if not cfg.firms_map_key:
         return "SEED", "No FIRMS_MAP_KEY configured: deterministic seed archive."
     probe = check_key()
-    if not probe.get("reachable", False):
-        return "SEED", f"FIRMS unreachable ({probe.get('detail')}): seed fallback engaged."
+    detail = probe.get("detail")
+    if not probe.get("reachable", False) or (
+        isinstance(detail, str) and detail.startswith("HTTP ")
+    ):
+        return "SEED", f"FIRMS unreachable ({detail}): seed fallback engaged."
     return "LIVE", "FIRMS reachable: live ingest enabled."
 
 
@@ -191,13 +197,17 @@ def _profile_from_aoi(aoi: Aoi):
 
 def _live_ingest_all(db: Session, aoi_list: list[Aoi]) -> dict:
     from .live_ingest import ingest_firms_for_aoi, latest_available_day
-
     out: dict = {}
+    day_range = 5
+    range_start = latest_available_day() - timedelta(days=day_range - 1)
     for aoi in aoi_list:
         res = ingest_firms_for_aoi(
-            db, aoi, day_range=5, day=latest_available_day()
+            db, aoi, day_range=day_range, day=range_start
         )
-        out[aoi.id] = {"status": res["status"], "rows": res["inserted"]}
+        out[aoi.id] = {
+            "status": res["status"], "rows": res["inserted"],
+            "message": res["message"], "pipeline": res.get("pipeline", {}),
+        }
         log.info("live ingest %s: %s (%d rows)", aoi.id, res["status"], res["inserted"])
     return out
 
@@ -213,7 +223,8 @@ def run_seed(force: bool = False) -> dict:
     db = SessionLocal()
     try:
         aoi_list = ensure_preset_aois(db)
-        if not force and seed_completed(db, cfg.seed_version):
+        effective, explanation = decide_mode(db)
+        if effective == "SEED" and not force and seed_completed(db, cfg.seed_version):
             log.info("seed version %s already present; skipping (FORCE_SEED=1 to rebuild)",
                      cfg.seed_version)
             return {"status": "SKIPPED", "reason": "already-seeded"}
@@ -224,7 +235,7 @@ def run_seed(force: bool = False) -> dict:
         # backfill. Refuse loudly instead of silently replacing 171k real
         # rows with synthetic ones.
         real = count_real_hotspots(db)
-        if real:
+        if real and effective == "SEED":
             override = (
                 force
                 and os.environ.get("EMBEREBEYE_ALLOW_SEED_OVER_REAL", "") == "1"
@@ -244,21 +255,27 @@ def run_seed(force: bool = False) -> dict:
                 "REAL DATA WILL BE REPLACED (FORCE_SEED=1 + ALLOW override): %s",
                 breakdown)
 
-        effective, explanation = decide_mode(db)
         log.info("data mode: %s (%s)", effective, explanation)
         scale = cfg.seed_scale
         if effective == "LIVE":
             live_report = _live_ingest_all(db, aoi_list)
-            # Live data covers only the recent window: the deterministic
-            # archive is still laid down underneath for the 2012+ history.
-            synth_report = _seed_synthetic(db, aoi_list, scale)
-            pipeline_report = _pipeline_all(db, aoi_list)
+            statuses = [item["status"] for item in live_report.values()]
+            succeeded = sum(status in {"OK", "PARTIAL"} for status in statuses)
+            overall_status = (
+                "FAILED" if not succeeded else
+                "OK" if statuses and all(status == "OK" for status in statuses) else
+                "PARTIAL"
+            )
             report = {
-                "status": "OK", "effective_mode": "LIVE",
+                "status": overall_status, "effective_mode": "LIVE",
                 "explanation": explanation,
-                "live": live_report, "synthetic_underlay": synth_report,
-                "pipeline": pipeline_report,
+                "live": live_report,
             }
+            # LIVE data is never mixed with the synthetic SEED archive and is
+            # never written into the seed-completion state. A failed live run
+            # is returned as a failure rather than silently switching modes.
+            log.info("live ingest complete: %s", json.dumps(report)[:400])
+            return report
         else:
             synth_report = _seed_synthetic(db, aoi_list, scale)
             pipeline_report = _pipeline_all(db, aoi_list)

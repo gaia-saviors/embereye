@@ -26,7 +26,7 @@ import gzip
 import hashlib
 import json
 import struct
-from datetime import date
+from datetime import date, timedelta
 from typing import Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -110,6 +110,35 @@ def _pip_filter(rows: list, aoi: Aoi) -> list:
     return [r for r, keep in zip(rows, inside) if keep]
 
 
+def _exact_filtered_count(db: Session, aoi: Aoi, sensor, satellite, confidence,
+                          daynight, min_frp) -> int:
+    """Count the selected population, applying the custom polygon exactly."""
+    if aoi.is_preset:
+        stmt = _apply_common(
+            select(func.count()).select_from(Hotspot), aoi, None, None,
+            sensor, satellite, confidence, daynight, min_frp,
+        )
+        return int(db.scalar(stmt) or 0)
+
+    stmt = _apply_common(
+        select(Hotspot.lon, Hotspot.lat), aoi, None, None,
+        sensor, satellite, confidence, daynight, min_frp,
+    )
+    from ..geometry import points_in_polygon
+    ring = json.loads(aoi.geojson)["coordinates"][0]
+    result = db.execute(stmt)
+    total = 0
+    while batch := result.fetchmany(50_000):
+        import numpy as np
+
+        inside = points_in_polygon(
+            np.asarray([r[0] for r in batch]),
+            np.asarray([r[1] for r in batch]), ring,
+        )
+        total += int(inside.sum())
+    return total
+
+
 @router.get("/hotspots", response_model=HotspotCollection)
 def hotspots(
     aoi: str = Query(..., description="AOI id"),
@@ -128,9 +157,13 @@ def hotspots(
     # spatial filter - the AOI is still required and must exist.
     bbox: str | None = Query(None,
         description='viewport bounds "w,s,e,n" in degrees'),
+    response: Response = None,
     db: Session = Depends(get_db),
 ) -> HotspotCollection:
     a = _aoi_or_404(db, aoi)
+    if start is not None and end is not None and start > end:
+        raise HTTPException(422, "start must be on or before end")
+    viewport = None
     if bbox is not None:
         try:
             bw, bs, be, bn = (float(x) for x in bbox.split(","))
@@ -138,33 +171,43 @@ def hotspots(
             raise HTTPException(422, "bbox must be 'w,s,e,n' in degrees")
         if not (-180 <= bw < be <= 180 and -90 <= bs < bn <= 90):
             raise HTTPException(422, "bbox out of range or inverted")
-        a = Aoi(
-            id=a.id, name=a.name, description=a.description,
-            geojson=a.geojson, west=bw, south=bs, east=be, north=bn,
-            is_preset=False,  # bbox = plain spatial filter, no PIP
-            created_at=a.created_at,
-        )
-        a.bbox_only = True  # type: ignore[attr-defined] - skips PIP below
+        viewport = (bw, bs, be, bn)
     total_stmt = _apply_common(
         select(func.count()).select_from(Hotspot), a, start, end, sensor,
         satellite, confidence, daynight, min_frp,
     )
+    if viewport is not None:
+        bw, bs, be, bn = viewport
+        total_stmt = total_stmt.where(
+            Hotspot.lon >= bw, Hotspot.lon <= be,
+            Hotspot.lat >= bs, Hotspot.lat <= bn,
+        )
     if hide_static:
         total_stmt = total_stmt.where(Hotspot.static_source.is_(False))
     total = int(db.scalar(total_stmt) or 0)
 
     stmt = _apply_common(select(Hotspot), a, start, end, sensor, satellite,
                          confidence, daynight, min_frp)
+    if viewport is not None:
+        bw, bs, be, bn = viewport
+        stmt = stmt.where(
+            Hotspot.lon >= bw, Hotspot.lon <= be,
+            Hotspot.lat >= bs, Hotspot.lat <= bn,
+        )
     if hide_static:
         stmt = stmt.where(Hotspot.static_source.is_(False))
     if a.is_preset:
         stmt = stmt.order_by(Hotspot.local_date, Hotspot.id).offset(offset).limit(limit)
         window = db.execute(stmt).scalars().all()
         total_pip = total
+        scan_truncated = False
     else:
-        # bbox scan for user AOIs: fetch capped set then filter exactly
-        stmt = stmt.order_by(Hotspot.local_date, Hotspot.id).limit(HARD_SCAN_CAP)
-        rows = _pip_filter(list(db.execute(stmt).scalars().all()), a)
+        # Read one extra candidate to distinguish a complete scan from the
+        # safety cap. The polygon is applied before pagination and counting.
+        stmt = stmt.order_by(Hotspot.local_date, Hotspot.id).limit(HARD_SCAN_CAP + 1)
+        candidates = list(db.execute(stmt).scalars().all())
+        scan_truncated = len(candidates) > HARD_SCAN_CAP
+        rows = _pip_filter(candidates[:HARD_SCAN_CAP], a)
         total_pip = len(rows)
         window = rows[offset:offset + limit]
 
@@ -184,11 +227,18 @@ def hotspots(
         }
         for r in window
     ]
+    truncated = scan_truncated or total_pip > offset + len(features)
+    if response is not None:
+        response.headers["X-Result-Truncated"] = str(truncated).lower()
+        response.headers["X-Result-Total"] = str(total_pip)
+        response.headers["X-Result-Limit"] = str(limit)
+        response.headers["X-Result-Total-Exact"] = str(not scan_truncated).lower()
     return HotspotCollection(
         features=features,
         meta=CollectionMeta(
             total=total_pip, returned=len(features), offset=offset,
-            truncated=(total_pip > len(rows)) if not a.is_preset else False,
+            truncated=truncated,
+            total_is_lower_bound=scan_truncated,
         ),
     )
 
@@ -229,8 +279,11 @@ def _snapshot_fingerprint(db: Session, a: Aoi, sensor, satellite, confidence,
         sensor, satellite, confidence, daynight, min_frp,
     )
     row = db.execute(fp_stmt).one()
+    count = (int(row[0] or 0) if a.is_preset else
+             _exact_filtered_count(db, a, sensor, satellite, confidence,
+                                   daynight, min_frp))
     return (a.id, sensor, satellite or "", confidence, daynight,
-            min_frp if min_frp is not None else "", int(row[0] or 0),
+            min_frp if min_frp is not None else "", count,
             int(row[1] or 0), int(row[2] or 0), str(row[3]))
 
 
@@ -349,9 +402,16 @@ def hotspots_snapshot(
             "aoi": aoi,
             "n_rows": total,
             "max_rows": SNAPSHOT_MAX_ROWS,
+            "truncated": True,
+            "total_is_lower_bound": False,
             "detail": ("AOI holds more rows than the snapshot cap; use "
                        "/hotspots/grid for the overview and /hotspots with "
                        "a bbox + day window for zoomed-in playback."),
+        }, headers={
+            "X-Result-Truncated": "true",
+            "X-Result-Total": str(total),
+            "X-Result-Limit": str(SNAPSHOT_MAX_ROWS),
+            "X-Result-Total-Exact": "true",
         })
     cached = _SNAP_CACHE.get(fp)
     if cached is not None:
@@ -375,11 +435,25 @@ def hotspots_snapshot(
             Hotspot.firms_product,
         ), a, None, None, sensor, satellite, confidence, daynight, min_frp)
     stmt = stmt.order_by(Hotspot.local_date, Hotspot.id)
-    if not a.is_preset:
-        stmt = stmt.limit(min(HARD_SCAN_CAP, SNAPSHOT_MAX_ROWS))
     # column tuples, not ORM objects: 170k+ identities are the encode
     # bottleneck otherwise
-    rows = list(db.execute(stmt).all())
+    result = db.execute(stmt)
+    if a.is_preset:
+        rows = list(result.all())
+    else:
+        from ..geometry import points_in_polygon
+        import numpy as np
+
+        ring = json.loads(a.geojson)["coordinates"][0]
+        rows = []
+        while batch := result.fetchmany(50_000):
+            inside = points_in_polygon(
+                np.asarray([r[4] for r in batch]),
+                np.asarray([r[3] for r in batch]), ring,
+            )
+            rows.extend(r for r, keep in zip(batch, inside) if keep)
+            if len(rows) > SNAPSHOT_MAX_ROWS:
+                break
     payload, header = _encode_snapshot(rows)
     etag = '"' + hashlib.sha256(payload).hexdigest()[:32] + '"'
     if len(_SNAP_CACHE) >= _SNAP_CACHE_MAX:
@@ -442,6 +516,8 @@ def hotspots_grid(
     the hard row cap, with "showing N of M" honesty.
     """
     a = _aoi_or_404(db, aoi)
+    if start is not None and end is not None and start > end:
+        raise HTTPException(422, "start must be on or before end")
     dialect = db.get_bind().dialect.name
     w0 = float(int(a.west / cell_deg)) * cell_deg
     s0 = float(int(a.south / cell_deg)) * cell_deg
@@ -449,11 +525,7 @@ def hotspots_grid(
     gy = sa_cast((Hotspot.lat - s0) / cell_deg, Integer)
     bucket = _bucket_expr(dialect, Hotspot.local_date)[res]
 
-    base = [Hotspot.lon >= a.west, Hotspot.lon <= a.east,
-            Hotspot.lat >= a.south, Hotspot.lat <= a.north]
-    if a.is_preset:
-        base = [Hotspot.aoi_id == a.id]
-    conds = list(base)
+    conds = list(_base_filters(a))
     if start is not None:
         conds.append(Hotspot.local_date >= start)
     if end is not None:
@@ -471,35 +543,79 @@ def hotspots_grid(
     if hide_static:
         conds.append(Hotspot.static_source.is_(False))
 
-    rows = db.execute(
-        select(
-            gx.label("gx"), gy.label("gy"), bucket.label("bkt"),
-            func.count().label("n"),
-            func.sum(sa_cast(Hotspot.sensor_family == "MODIS", Integer)).label("n_modis"),
-            func.sum(sa_cast(Hotspot.sensor_family == "VIIRS", Integer)).label("n_viirs"),
-            func.coalesce(func.sum(Hotspot.frp_mw), 0.0).label("frp"),
-            func.sum(sa_cast(Hotspot.static_source.is_(True), Integer)).label("n_static"),
-        )
-        .where(*conds)
-        .group_by(gx, gy, bucket)
-        .order_by(func.count().desc())
-        .limit(GRID_MAX_CELLS + 1)
-    ).all()
+    if a.is_preset:
+        rows = db.execute(
+            select(
+                gx.label("gx"), gy.label("gy"), bucket.label("bkt"),
+                func.count().label("n"),
+                func.sum(sa_cast(Hotspot.sensor_family == "MODIS", Integer)).label("n_modis"),
+                func.sum(sa_cast(Hotspot.sensor_family == "VIIRS", Integer)).label("n_viirs"),
+                func.coalesce(func.sum(Hotspot.frp_mw), 0.0).label("frp"),
+                func.sum(sa_cast(Hotspot.static_source.is_(True), Integer)).label("n_static"),
+            )
+            .where(*conds)
+            .group_by(gx, gy, bucket)
+            .order_by(func.count().desc())
+            .limit(GRID_MAX_CELLS + 1)
+        ).all()
+        total_points = int(db.scalar(
+            select(func.count()).select_from(Hotspot).where(*conds)) or 0)
+    else:
+        # A grouped SQL bbox result includes points outside a drawn polygon.
+        # Filter candidate rows exactly, then aggregate only accepted points.
+        from ..geometry import points_in_polygon
+        import numpy as np
+
+        ring = json.loads(a.geojson)["coordinates"][0]
+        grouped: dict[tuple[int, int, str], dict] = {}
+        result = db.execute(select(
+            Hotspot.lon, Hotspot.lat, Hotspot.local_date,
+            Hotspot.sensor_family, Hotspot.frp_mw, Hotspot.static_source,
+        ).where(*conds))
+        total_points = 0
+        while batch := result.fetchmany(50_000):
+            inside = points_in_polygon(
+                np.asarray([r[0] for r in batch]),
+                np.asarray([r[1] for r in batch]), ring,
+            )
+            for r, keep in zip(batch, inside):
+                if not keep:
+                    continue
+                lon, lat, day, family, frp, static = r
+                ix = int((lon - w0) / cell_deg)
+                iy = int((lat - s0) / cell_deg)
+                if res == "month":
+                    bkt = day.strftime("%Y-%m")
+                else:
+                    bkt = (day - timedelta(days=day.weekday())).isoformat()
+                item = grouped.setdefault((ix, iy, bkt), {
+                    "gx": ix, "gy": iy, "bkt": bkt, "n": 0,
+                    "n_modis": 0, "n_viirs": 0, "frp": 0.0, "n_static": 0,
+                })
+                item["n"] += 1
+                item["n_modis"] += int(family == "MODIS")
+                item["n_viirs"] += int(family == "VIIRS")
+                item["frp"] += float(frp or 0.0)
+                item["n_static"] += int(bool(static))
+                total_points += 1
+        rows = sorted(grouped.values(), key=lambda r: (-r["n"], r["bkt"], r["gy"], r["gx"]))
+
     truncated = len(rows) > GRID_MAX_CELLS
     rows = rows[:GRID_MAX_CELLS]
-    total_points = int(db.scalar(
-        select(func.count()).select_from(Hotspot).where(*conds)) or 0)
     cells = [
         {
-            "i": int(r.gx), "j": int(r.gy),
-            "w": round(w0 + int(r.gx) * cell_deg, 5),
-            "s": round(s0 + int(r.gy) * cell_deg, 5),
-            "e": round(w0 + (int(r.gx) + 1) * cell_deg, 5),
-            "n_": round(s0 + (int(r.gy) + 1) * cell_deg, 5),
-            "bucket": str(r.bkt),
-            "n": int(r.n), "n_modis": int(r.n_modis or 0),
-            "n_viirs": int(r.n_viirs or 0), "n_static": int(r.n_static or 0),
-            "frp_mw": round(float(r.frp or 0.0), 1),
+            "i": int(r["gx"] if isinstance(r, dict) else r.gx),
+            "j": int(r["gy"] if isinstance(r, dict) else r.gy),
+            "w": round(w0 + int(r["gx"] if isinstance(r, dict) else r.gx) * cell_deg, 5),
+            "s": round(s0 + int(r["gy"] if isinstance(r, dict) else r.gy) * cell_deg, 5),
+            "e": round(w0 + (int(r["gx"] if isinstance(r, dict) else r.gx) + 1) * cell_deg, 5),
+            "n_": round(s0 + (int(r["gy"] if isinstance(r, dict) else r.gy) + 1) * cell_deg, 5),
+            "bucket": str(r["bkt"] if isinstance(r, dict) else r.bkt),
+            "n": int(r["n"] if isinstance(r, dict) else r.n),
+            "n_modis": int((r["n_modis"] if isinstance(r, dict) else r.n_modis) or 0),
+            "n_viirs": int((r["n_viirs"] if isinstance(r, dict) else r.n_viirs) or 0),
+            "n_static": int((r["n_static"] if isinstance(r, dict) else r.n_static) or 0),
+            "frp_mw": round(float((r["frp"] if isinstance(r, dict) else r.frp) or 0.0), 1),
         }
         for r in rows
     ]

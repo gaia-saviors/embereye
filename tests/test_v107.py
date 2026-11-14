@@ -4,6 +4,7 @@ calendar payload optimization, dual export, and dynamic AOI synthesis.
 from datetime import date, datetime
 import os
 import sys
+import pytest
 
 _repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _backend = os.path.join(_repo_root, "backend")
@@ -18,7 +19,11 @@ from starlette.testclient import TestClient
 
 from app.db import SessionLocal, create_all
 from app.main import app
+import app.main as main_mod
 from app.models import Aoi, Hotspot, IngestRun
+from app.routers import aois as aois_mod
+from app.routers import export as export_mod
+from app.routers import meta as meta_mod
 from app.seed.profiles import PRESET_PROFILES
 from app.seed.pipeline import seed_unseeded_presets, ensure_preset_aois
 
@@ -136,11 +141,9 @@ def test_intra_viirs_methodology_documented():
 
 def test_public_read_only_blocks_api_writes(monkeypatch):
     """Public mode must reject every mutating API method before route work."""
-    meta_route = next(route for route in app.routes if getattr(route, "path", None) == "/api/meta")
-    meta_globals = meta_route.endpoint.__globals__
-    cfg = meta_globals["get_settings"]()
+    cfg = meta_mod.get_settings()
     monkeypatch.setattr(cfg, "public_read_only", True)
-    monkeypatch.setitem(meta_globals, "get_settings", lambda: cfg)
+    monkeypatch.setitem(meta_mod.__dict__, "get_settings", lambda: cfg)
     guard = next(
         middleware.kwargs["dispatch"]
         for middleware in app.user_middleware
@@ -160,6 +163,32 @@ def test_public_read_only_blocks_api_writes(monkeypatch):
         response = getattr(client, method)(path, json=payload) if payload is not None else getattr(client, method)(path)
         assert response.status_code == 403, (method, path, response.text)
         assert "read-only" in response.json()["detail"].lower()
+
+
+def test_public_read_only_startup_skips_schema_ddl(monkeypatch):
+    cfg = main_mod.get_settings()
+    monkeypatch.setattr(cfg, "public_read_only", True)
+    monkeypatch.setitem(main_mod.__dict__, "get_settings", lambda: cfg)
+    monkeypatch.setattr(
+        main_mod, "create_all",
+        lambda: pytest.fail("public read-only startup must not run DDL"),
+    )
+    startup = next(
+        handler for handler in main_mod.app.router.on_startup
+        if handler.__name__ == "_startup"
+    )
+    startup()
+
+
+def test_public_read_only_startup_skips_job_recovery(monkeypatch):
+    cfg = aois_mod.get_settings()
+    monkeypatch.setattr(cfg, "public_read_only", True)
+    monkeypatch.setitem(aois_mod.__dict__, "get_settings", lambda: cfg)
+    monkeypatch.setattr(
+        aois_mod, "SessionLocal",
+        lambda: pytest.fail("read-only startup must not open a write session"),
+    )
+    aois_mod._recover_interrupted_jobs()
 
 
 def test_create_aoi_runs_aggregation_job(monkeypatch):
@@ -416,3 +445,189 @@ def test_hotspot_export_applies_frontend_filters():
     assert all(row["daynight"] == "D" for row in rows_filtered)
     assert all(float(row["frp_mw"]) >= 0.1 for row in rows_filtered)
     assert all(row["static_source"].lower() in {"false", "0"} for row in rows_filtered)
+
+
+@pytest.fixture()
+def triangle_aoi():
+    """AOI whose triangular interior excludes a point inside its bbox."""
+    import json
+    from app.models import AggregationJob, HarmonizedDaily
+
+    _ensure_seeded()
+    aoi_id = "challenge-integrity-triangle"
+    source_tag = "challenge_integrity_test"
+    with SessionLocal() as db:
+        db.query(AggregationJob).filter(AggregationJob.aoi_id == aoi_id).delete()
+        db.query(HarmonizedDaily).filter(HarmonizedDaily.aoi_id == aoi_id).delete()
+        db.query(Hotspot).filter(Hotspot.source_version == source_tag).delete()
+        db.query(Aoi).filter(Aoi.id == aoi_id).delete()
+        db.query(IngestRun).filter(IngestRun.source == source_tag).delete()
+        aoi = Aoi(
+            id=aoi_id, name="Integrity triangle", description="", is_preset=False,
+            geojson=json.dumps({"type": "Polygon", "coordinates": [[
+                [0.0, 0.0], [2.0, 0.0], [0.0, 2.0], [0.0, 0.0],
+            ]]}),
+            west=0.0, south=0.0, east=2.0, north=2.0,
+        )
+        db.add(aoi)
+        run = IngestRun(mode="SEED", source=source_tag, status="OK", aoi_id=None)
+        db.add(run)
+        db.commit()
+        day = date(2020, 1, 2)
+        points = [
+            (0.2, 0.2, "VIIRS", 2.0),
+            (0.4, 0.2, "MODIS", 3.0),
+            (1.8, 1.8, "VIIRS", 100.0),  # inside bbox, outside polygon
+        ]
+        for lon, lat, family, frp in points:
+            db.add(Hotspot(
+                aoi_id="nile-delta-egypt", sensor_family=family,
+                satellite="SNPP" if family == "VIIRS" else "Terra",
+                instrument=family, resolution_m=375 if family == "VIIRS" else 1000,
+                acq_dt_utc=datetime(2020, 1, 2, 12), acq_date=day, local_date=day,
+                lat=lat, lon=lon, brightness_t4_k=340.0,
+                brightness_t11_k=300.0, frp_mw=frp, confidence_class="HIGH",
+                confidence_raw=None, daynight="D", scan_km=0.5, track_km=0.5,
+                pixel_area_km2=0.25, saturated=False, band21_fallback=False,
+                static_source=False, recurring_source=False, source_version=source_tag,
+                firms_product="", firms_type=None, run_id=run.id,
+            ))
+        db.add(HarmonizedDaily(
+            aoi_id=aoi_id, local_date=day, n_modis=1, n_viirs=1,
+            n_comparable_modis=1, n_comparable_viirs=1, n_harmonized=2.0,
+            n_harmonized_lo=2.0, n_harmonized_hi=2.0,
+            frp_modis_mw=3.0, frp_viirs_mw=2.0, frp_harmonized_mw=5.0,
+            n_static=0, n_night=0, static_share=0.0,
+            seam_weight=1.0, provenance="VIIRS_NATIVE", flag_high=False,
+            flag_low=False,
+        ))
+        db.commit()
+    yield aoi_id
+    with SessionLocal() as db:
+        db.query(AggregationJob).filter(AggregationJob.aoi_id == aoi_id).delete()
+        db.query(HarmonizedDaily).filter(HarmonizedDaily.aoi_id == aoi_id).delete()
+        db.query(Hotspot).filter(Hotspot.source_version == source_tag).delete()
+        db.query(Aoi).filter(Aoi.id == aoi_id).delete()
+        db.query(IngestRun).filter(IngestRun.source == source_tag).delete()
+        db.commit()
+
+
+def test_custom_polygon_is_consistent_across_map_grid_and_snapshot(triangle_aoi):
+    import gzip
+    import json
+    import struct
+
+    points = client.get(f"/api/hotspots?aoi={triangle_aoi}&limit=1")
+    assert points.status_code == 200, points.text
+    body = points.json()
+    assert body["meta"]["total"] == 2
+    assert body["meta"]["returned"] == 1
+    assert body["meta"]["truncated"] is True
+    assert body["meta"]["total_is_lower_bound"] is False
+    assert all(x["geometry"]["coordinates"][0] + x["geometry"]["coordinates"][1] <= 2
+               for x in body["features"])
+
+    # A viewport inside the triangle bbox but outside the polygon must not
+    # override the AOI's actual geometry.
+    outside_view = client.get(
+        f"/api/hotspots?aoi={triangle_aoi}&bbox=1.3,1.3,1.9,1.9"
+    )
+    assert outside_view.status_code == 200
+    assert outside_view.json()["features"] == []
+
+    grid = client.get(f"/api/hotspots/grid?aoi={triangle_aoi}&res=month&cell_deg=0.25")
+    assert grid.status_code == 200
+    grid_body = grid.json()
+    assert grid_body["meta"]["total_points"] == 2
+    assert sum(cell["n"] for cell in grid_body["cells"]) == 2
+
+    snap = client.get(f"/api/hotspots/snapshot?aoi={triangle_aoi}")
+    assert snap.status_code == 200
+    payload = gzip.decompress(snap.content)
+    hlen = struct.unpack("<I", payload[8:12])[0]
+    header = json.loads(payload[12:12 + hlen])
+    assert header["n"] == 2
+
+
+def test_filtered_calendar_uses_custom_polygon_and_selected_period(triangle_aoi):
+    response = client.get(
+        "/api/calendar",
+        params={
+            "aoi": triangle_aoi, "start": "2020-01-02", "end": "2020-01-02",
+            "sensor": "VIIRS",
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [cell["date"] for cell in body["cells"]] == ["2020-01-02"]
+    assert body["cells"][0]["n_viirs"] == 1
+    assert body["cells"][0]["n_harmonized"] == 1
+    assert body["weekly_cells"]
+    assert sum(week["n_harmonized"] for week in body["weekly_cells"]) == 1
+
+
+def test_hotspot_exports_report_truncation_in_headers_and_remain_valid(
+    triangle_aoi, monkeypatch,
+):
+    import csv
+    import io
+    import json
+    monkeypatch.setattr(export_mod, "HOTSPOT_EXPORT_LIMIT", 1)
+    common = {
+        "aoi": triangle_aoi, "level": "hotspots",
+        "start": "2020-01-02", "end": "2020-01-02",
+    }
+    csv_response = client.get("/api/export", params={**common, "format": "csv"})
+    assert csv_response.status_code == 200
+    assert csv_response.headers["x-export-truncated"] == "true"
+    assert csv_response.headers["x-export-total"] == "2"
+    assert csv_response.headers["x-export-total-exact"] == "true"
+    assert len(list(csv.DictReader(io.StringIO(csv_response.text)))) == 1
+
+    geojson_response = client.get("/api/export", params={**common, "format": "geojson"})
+    assert geojson_response.status_code == 200
+    assert geojson_response.headers["x-export-truncated"] == "true"
+    geojson = json.loads(geojson_response.text)
+    assert geojson["type"] == "FeatureCollection"
+    assert len(geojson["features"]) == 1
+
+
+def test_filtered_calendar_rejects_reversed_period(triangle_aoi):
+    response = client.get(
+        "/api/calendar?aoi=%s&start=2020-01-03&end=2020-01-02" % triangle_aoi
+    )
+    assert response.status_code == 422
+
+
+def test_rebuild_reuses_active_job_and_startup_fails_interrupted_jobs(
+    triangle_aoi, monkeypatch,
+):
+    from app.models import AggregationJob
+    with SessionLocal() as db:
+        job = AggregationJob(
+            id="challenge-job-active", aoi_id=triangle_aoi,
+            status="RUNNING", progress=0.4, message="working",
+        )
+        db.add(job)
+        db.commit()
+    repeated = client.post(f"/api/aois/{triangle_aoi}/rebuild")
+    assert repeated.status_code == 202
+    assert repeated.json()["id"] == "challenge-job-active"
+    with SessionLocal() as db:
+        assert db.query(AggregationJob).filter(
+            AggregationJob.aoi_id == triangle_aoi,
+            AggregationJob.status.in_(("PENDING", "RUNNING")),
+        ).count() == 1
+
+    aois_mod._recover_interrupted_jobs()
+    with SessionLocal() as db:
+        recovered = db.get(AggregationJob, "challenge-job-active")
+        assert recovered.status == "FAILED"
+        assert "restart" in recovered.message
+
+    # Once terminal, the same AOI can be queued again; do not run the heavy
+    # background pipeline as part of this API concurrency regression.
+    monkeypatch.setattr(aois_mod, "_run_aggregation_job", lambda *_: None)
+    again = client.post(f"/api/aois/{triangle_aoi}/rebuild")
+    assert again.status_code == 202
+    assert again.json()["id"] != "challenge-job-active"

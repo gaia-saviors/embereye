@@ -11,6 +11,19 @@ const GUTTER = 48;
 const ROW_H = 21;
 const TOP = 24;
 const ESTIMATED_HATCH_ID = "estimated-hatch";
+const UNIQUE_PROVENANCE_KEYS = (Object.keys(PROVENANCE_LABEL) as (keyof typeof PROVENANCE_LABEL)[])
+  .filter((key, index, keys) => keys.findIndex((candidate) => PROVENANCE_LABEL[candidate] === PROVENANCE_LABEL[key]) === index);
+
+type CalendarTextRow = {
+  start: string;
+  end: string;
+  period: string;
+  modis: number | null;
+  viirs: number | null;
+  harmonized: number;
+  frp: number | null;
+  provenance: string;
+};
 
 export default function CalendarView() {
   const aoiId = useStore((s) => s.aoiId);
@@ -45,9 +58,15 @@ export default function CalendarView() {
   const [p99Week, setP99Week] = useState(200);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [calendarRetry, setCalendarRetry] = useState(0);
   const [headline, setHeadline] = useState<HeadlineResponse | null>(null);
+  const [headlineError, setHeadlineError] = useState<string | null>(null);
+  const [headlineLoading, setHeadlineLoading] = useState(false);
+  const [headlineRetry, setHeadlineRetry] = useState(0);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(1100);
+  const [focusDate, setFocusDate] = useState<string | null>(null);
+  const [showCalendarTable, setShowCalendarTable] = useState(false);
 
   const activeAoi = aois.find((a) => a.id === aoiId);
 
@@ -138,20 +157,24 @@ export default function CalendarView() {
     return () => {
       alive = false;
     };
-  }, [aoiId, cacheKey, calendarStart, rangeEnd, dataRevision, sensor, confidence, daynight, minFrp, hideStaticSources, setCalendar]);
+  }, [aoiId, cacheKey, calendarStart, rangeEnd, dataRevision, sensor, confidence, daynight, minFrp, hideStaticSources, setCalendar, calendarRetry]);
 
   useEffect(() => {
     if (!aoiId) {
       setHeadline(null);
+      setHeadlineError(null);
       return;
     }
     let alive = true;
     setHeadline(null);
+    setHeadlineError(null);
+    setHeadlineLoading(true);
     api.headline(aoiId)
       .then((result) => alive && setHeadline(result))
-      .catch(() => alive && setHeadline(null));
+      .catch((requestError) => alive && setHeadlineError((requestError as Error).message))
+      .finally(() => alive && setHeadlineLoading(false));
     return () => { alive = false; };
-  }, [aoiId, dataRevision]);
+  }, [aoiId, dataRevision, headlineRetry]);
 
   const years = calendar?.summary.years ?? [];
   const viirsStart = calendar?.viirs_start_date ?? null;
@@ -174,6 +197,30 @@ export default function CalendarView() {
     return m;
   }, [calendar]);
 
+  const firstCalendarFocusDate = useMemo(() => {
+    if (matrixView === "monthly") return years.length ? `${years[0]}-01-01` : null;
+    const candidates = [
+      ...(calendar?.transferred_weeks ?? []).filter((w) => years.includes(w.year)).map((w) => w.start_date),
+      ...(calendar?.cells ?? [])
+        .filter((cell) => years.includes(cell.year) && cell.provenance !== "MODIS_TRANSFERRED" && cell.provenance !== "MODIS_ONLY")
+        .map((cell) => cell.date),
+    ].sort();
+    return candidates[0] ?? null;
+  }, [calendar, matrixView, years]);
+  const visibleCalendarDates = useMemo(() => {
+    if (matrixView === "monthly") {
+      return years.flatMap((year) => Array.from({ length: 12 }, (_, month) => `${year}-${String(month + 1).padStart(2, "0")}-01`));
+    }
+    return [
+      ...(calendar?.transferred_weeks ?? []).filter((week) => years.includes(week.year)).map((week) => week.start_date),
+      ...(calendar?.cells ?? [])
+        .filter((cell) => years.includes(cell.year))
+        .filter((cell) => seamDoy === null || seamYear === null || cell.year > seamYear || cell.doy >= seamDoy)
+        .filter((cell) => cell.provenance !== "MODIS_TRANSFERRED" && cell.provenance !== "MODIS_ONLY")
+        .map((cell) => cell.date),
+    ];
+  }, [calendar, matrixView, years, seamDoy, seamYear]);
+
   const weeksByYear = useMemo(() => {
     const m = new Map<number, TransferredWeek[]>();
     for (const w of calendar?.transferred_weeks ?? []) {
@@ -182,6 +229,32 @@ export default function CalendarView() {
       m.set(w.year, list);
     }
     return m;
+  }, [calendar]);
+
+  const accessibleCalendarRows = useMemo<CalendarTextRow[]>(() => {
+    if (!calendar) return [];
+    return [
+      ...calendar.cells.map((cell) => ({
+        start: cell.date,
+        end: cell.date,
+        period: "Day",
+        modis: cell.n_modis,
+        viirs: cell.n_viirs,
+        harmonized: cell.n_harmonized,
+        frp: cell.frp_harmonized_mw,
+        provenance: PROVENANCE_LABEL[cell.provenance],
+      })),
+      ...(calendar.transferred_weeks ?? []).map((week) => ({
+        start: week.start_date,
+        end: week.end_date,
+        period: `ISO week ${week.iso_week}`,
+        modis: null,
+        viirs: null,
+        harmonized: week.n_harmonized,
+        frp: null,
+        provenance: `Transferred MODIS estimate; ${week.n_days_with_data}/7 days with data`,
+      })),
+    ].sort((a, b) => a.start.localeCompare(b.start));
   }, [calendar]);
 
   // Annual totals for each year
@@ -324,7 +397,7 @@ export default function CalendarView() {
         totalVolume: 0,
         dailyRate: 0,
         anomaliesHighCount: 0,
-        calibration: "Theil-Sen Log-Linear · R² = 0.852",
+        calibration: "Harmonization method loading",
       };
     }
     const totalVol = Math.round(calendar.cells.reduce((acc, c) => acc + (c.n_harmonized || 0), 0));
@@ -341,7 +414,7 @@ export default function CalendarView() {
       totalVolume: totalVol,
       dailyRate: Number(meanDaily),
       anomaliesHighCount: highAnomalies,
-      calibration: meta?.methodology.harmonization_tier ?? "Theil-Sen Log-Linear · R² = 0.852",
+      calibration: meta?.methodology.harmonization_tier ?? "Harmonization method loading",
     };
   }, [calendar, years, meta]);
 
@@ -366,11 +439,51 @@ export default function CalendarView() {
   const completeDeltaPct = headline?.complete_total != null && headline.complete_median != null && headline.complete_median > 0
     ? ((headline.complete_total - headline.complete_median) / headline.complete_median) * 100
     : null;
+  const requestedFocusDate = focusDate ?? selected;
+  const rovingDate = requestedFocusDate && visibleCalendarDates.includes(requestedFocusDate)
+    ? requestedFocusDate
+    : firstCalendarFocusDate;
+
+  function onCalendarCellKeyDown(event: React.KeyboardEvent<SVGRectElement>, date: string) {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setSelected(date);
+      return;
+    }
+    const direction = event.key === "ArrowLeft" ? [-1, 0]
+      : event.key === "ArrowRight" ? [1, 0]
+      : event.key === "ArrowUp" ? [0, -1]
+      : event.key === "ArrowDown" ? [0, 1]
+      : null;
+    if (!direction) return;
+    const current = event.currentTarget;
+    const currentBox = current.getBBox();
+    const cx = currentBox.x + currentBox.width / 2;
+    const cy = currentBox.y + currentBox.height / 2;
+    const [dx, dy] = direction;
+    const candidates = Array.from(wrapRef.current?.querySelectorAll<SVGRectElement>(".calendar-cell-control") ?? [])
+      .filter((cell) => cell !== current)
+      .map((cell) => {
+        const box = cell.getBBox();
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        const primary = dx ? (x - cx) * dx : (y - cy) * dy;
+        const secondary = dx ? Math.abs(y - cy) : Math.abs(x - cx);
+        return { cell, score: primary > 0 ? primary + secondary * 2 : Number.POSITIVE_INFINITY };
+      })
+      .sort((a, b) => a.score - b.score);
+    const next = candidates[0]?.cell;
+    if (next && Number.isFinite(candidates[0].score)) {
+      event.preventDefault();
+      next.focus();
+      setFocusDate(next.dataset.calendarDate ?? null);
+    }
+  }
 
   if (!aoiId) {
     return <Empty message="Select an area of interest from the control bar above." />;
   }
-  if (loading) return <Empty message="Harmonizing multi-decadal fire records..." spinner />;
+  if (loading) return <Empty message="Loading multi-decadal fire records…" spinner />;
   if (error) {
     const isNoData = error.includes("404") || error.includes("no calendar data");
     return (
@@ -380,24 +493,30 @@ export default function CalendarView() {
             🛰️
           </div>
           <h3 className="mb-2 font-display text-base font-bold text-alabaster">
-            {isNoData ? "NASA FIRMS Archive Not Backfilled" : "Calendar Unavailable"}
+            {isNoData ? "Calendar Data Not Available" : "Calendar Unavailable"}
           </h3>
           <p className="mb-5 text-xs leading-relaxed text-pewter">
             {isNoData
-              ? "The v1.0.8 offline database includes a verified NASA FIRMS archive for Nile Delta, Egypt. Other preset regions in that snapshot use synthetic demo records; custom regions use loaded observations that fall inside their polygon."
+              ? "This AOI or date range has no calendar rows in the selected archive. The v1.0.8 snapshot contains real FIRMS data for the Nile Delta and synthetic demo rows for other preset AOIs. Check the selected range and provenance, or backfill observations for this area."
               : error}
           </p>
-          <button
-            onClick={() => useStore.getState().setAoiId("nile-delta-egypt")}
-            className="rounded-lg bg-terra px-5 py-2.5 font-display text-xs font-bold text-alabaster shadow-md transition hover:bg-ember-400"
-          >
-            Switch to Nile Delta (Active Archive)
-          </button>
+          <div className="flex flex-wrap justify-center gap-2">
+            <button type="button" onClick={() => setCalendarRetry((attempt) => attempt + 1)} className="rounded-lg border border-basalt-400 px-4 py-2.5 font-display text-xs font-bold text-pewter hover:text-alabaster">Retry calendar</button>
+            <button
+              onClick={() => useStore.getState().setAoiId("nile-delta-egypt")}
+              className="rounded-lg bg-terra px-5 py-2.5 font-display text-xs font-bold text-alabaster shadow-md transition hover:bg-ember-400"
+            >
+              Switch to Nile Delta
+            </button>
+          </div>
         </div>
       </div>
     );
   }
-  if (!calendar) return <Empty message="No calendar data available." />;
+  if (!calendar) return <Empty message="No calendar data is available for this area." onRetry={() => setCalendarRetry((attempt) => attempt + 1)} />;
+  if (calendar.cells.length === 0 && (calendar.transferred_weeks?.length ?? 0) === 0) {
+    return <Empty message="The selected area and period contain no calendar observations." onRetry={() => setCalendarRetry((attempt) => attempt + 1)} />;
+  }
 
   const hasWeekly = (calendar.transferred_weeks?.length ?? 0) > 0;
 
@@ -455,10 +574,23 @@ export default function CalendarView() {
           <div className="text-[10px] text-pewter truncate" title={headline?.complete_note ?? undefined}>
             Median: <span className="font-mono font-semibold text-alabaster">{fmtInt(headline?.complete_median ?? undefined)}</span> · Actual: <span className="font-mono font-semibold text-alabaster">{fmtInt(headline?.complete_total ?? undefined)}</span>
           </div>
-          <div className="mt-1 truncate text-[9px] text-muted" title={headline?.provisional_note ?? undefined}>
-            {headline?.current_partial && partialMonthLabel ? `${partialMonthLabel} in progress · ${headline.days_in_month} day(s) observed` : headline ? "Latest available month is complete" : "Loading headline…"}
-            {headline?.provisional ? " · NRT provisional tail" : ""}
-            {monthMetrics?.peakMonthStr ? ` · View peak: ${monthMetrics.peakMonthStr}` : ""}
+          <div className="mt-1 truncate text-[9px] text-muted" title={headlineError ?? headline?.provisional_note ?? undefined}>
+            {headlineError ? (
+              <button
+                type="button"
+                onClick={() => setHeadlineRetry((attempt) => attempt + 1)}
+                className="font-semibold text-amber underline underline-offset-2"
+                aria-label="Retry monthly headline request"
+              >
+                Monthly comparison unavailable · Retry
+              </button>
+            ) : headlineLoading ? "Loading monthly comparison…" : (
+              <>
+                {headline?.current_partial && partialMonthLabel ? `${partialMonthLabel} in progress · ${headline.days_in_month} day(s) observed` : headline ? "Latest available month is complete" : "Monthly comparison unavailable"}
+                {headline?.provisional ? " · NRT provisional tail" : ""}
+                {monthMetrics?.peakMonthStr ? ` · View peak: ${monthMetrics.peakMonthStr}` : ""}
+              </>
+            )}
           </div>
         </div>
 
@@ -623,7 +755,7 @@ export default function CalendarView() {
               {matrixView === "daily" ? (
                 MONTH_DOY_START.map((doy, i) => (
                   <g key={i}>
-                    <text x={GUTTER + doy * cellW} y={12} fontSize={10} fill="#A09CA8" fontFamily="Inter, sans-serif">
+                    <text x={GUTTER + doy * cellW} y={12} fontSize={10} fill="#A09CA8" fontFamily="Public Sans, sans-serif">
                       {MONTHS[i]}
                     </text>
                     <line
@@ -639,7 +771,7 @@ export default function CalendarView() {
                   const mx = GUTTER + i * (monthColW + 4);
                   return (
                     <g key={mName}>
-                      <text x={mx + monthColW / 2} y={12} textAnchor="middle" fontSize={10} fill="#A09CA8" fontFamily="Inter, sans-serif" fontWeight="600">
+                      <text x={mx + monthColW / 2} y={12} textAnchor="middle" fontSize={10} fill="#A09CA8" fontFamily="Public Sans, sans-serif" fontWeight="600">
                         {mName}
                       </text>
                     </g>
@@ -653,7 +785,7 @@ export default function CalendarView() {
                 y={12}
                 fontSize={10}
                 fill="#A09CA8"
-                fontFamily="Inter, sans-serif"
+                fontFamily="Public Sans, sans-serif"
                 fontWeight="600"
               >
                 ANNUAL TOTALS
@@ -676,7 +808,7 @@ export default function CalendarView() {
                       fontSize={10}
                       fill="#A09CA8"
                       textAnchor="end"
-                      fontFamily="JetBrains Mono, monospace"
+                      fontFamily="ui-monospace, monospace"
                       fontWeight="500"
                     >
                       {year}
@@ -706,6 +838,7 @@ export default function CalendarView() {
                         const histMed = monthMetrics?.mediansByMonth[m] ?? 0;
                         const delta = histMed > 0 ? ((val - histMed) / histMed) * 100 : 0;
                         const t = Math.min(1, val / (monthMetrics?.maxMonthly || 1));
+                        const monthDate = `${year}-${String(m).padStart(2, "0")}-01`;
 
                         return (
                           <g key={`m-${year}-${m}`}>
@@ -716,7 +849,11 @@ export default function CalendarView() {
                               height={ROW_H - 4}
                               rx={2}
                               fill={val > 0 ? rampColor(Math.pow(t, 0.6), colorRamp) : "#141318"}
-                              className="cursor-help transition-colors"
+                              className="calendar-cell-control cursor-help transition-colors"
+                              role="button"
+                              tabIndex={rovingDate === monthDate ? 0 : -1}
+                              data-calendar-date={monthDate}
+                              aria-label={`${MONTHS[m - 1]} ${year}, ${fmtInt(val)} harmonized detections${isEst ? ", transferred estimate" : ", observed period"}`}
                               onMouseEnter={(e) =>
                                 setHover({
                                   kind: "month",
@@ -730,6 +867,9 @@ export default function CalendarView() {
                                   y: e.clientY,
                                 })
                               }
+                              onFocus={() => setFocusDate(monthDate)}
+                              onClick={() => setSelected(monthDate)}
+                              onKeyDown={(e) => onCalendarCellKeyDown(e, monthDate)}
                             />
                             {isEst && (
                               <rect
@@ -749,7 +889,7 @@ export default function CalendarView() {
                                 textAnchor="middle"
                                 fontSize={9}
                                 fill="#F4F3F6"
-                                fontFamily="JetBrains Mono, monospace"
+                                fontFamily="ui-monospace, monospace"
                                 fontWeight="500"
                                 pointerEvents="none"
                                 opacity={0.9}
@@ -781,18 +921,15 @@ export default function CalendarView() {
                                   height={ROW_H - 4}
                                   fill={w.n_harmonized > 0 ? rampColor(Math.pow(t, 0.6), colorRamp) : "#141318"}
                                   opacity={0.88}
-                                  className="cursor-pointer focus-visible:outline-none"
+                                  className="calendar-cell-control cursor-pointer"
                                   role="button"
-                                  tabIndex={0}
+                                  tabIndex={rovingDate === w.start_date ? 0 : -1}
+                                  data-calendar-date={w.start_date}
                                   aria-label={`Select week ${w.iso_week}, ${w.year}, ${fmtInt(w.n_harmonized)} harmonized detections`}
                                   onMouseEnter={(e) => setHover({ kind: "week", week: w, x: e.clientX, y: e.clientY })}
                                   onClick={() => setSelected(w.start_date)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault();
-                                      setSelected(w.start_date);
-                                    }
-                                  }}
+                                  onFocus={() => setFocusDate(w.start_date)}
+                                  onKeyDown={(e) => onCalendarCellKeyDown(e, w.start_date)}
                                 />
                                 <rect
                                   x={x}
@@ -847,18 +984,15 @@ export default function CalendarView() {
                                   fill={c.provenance === "NO_DATA" ? "#141318" : rampColor(Math.pow(t, 0.6), colorRamp)}
                                   stroke={isSel ? "#FFF3B0" : undefined}
                                   strokeWidth={isSel ? 1.4 : 0}
-                                  className="cursor-pointer focus-visible:outline-none"
+                                  className="calendar-cell-control cursor-pointer"
                                   role="button"
-                                  tabIndex={0}
+                                  tabIndex={rovingDate === c.date ? 0 : -1}
+                                  data-calendar-date={c.date}
                                   aria-label={`Select ${c.date}, ${fmtInt(c.n_harmonized)} harmonized detections`}
                                   onMouseEnter={(e) => setHover({ kind: "day", cell: c, x: e.clientX, y: e.clientY })}
                                   onClick={() => setSelected(c.date)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter" || e.key === " ") {
-                                      e.preventDefault();
-                                      setSelected(c.date);
-                                    }
-                                  }}
+                                  onFocus={() => setFocusDate(c.date)}
+                                  onKeyDown={(e) => onCalendarCellKeyDown(e, c.date)}
                                 />
                                 {flaggedLow && (
                                   <circle
@@ -935,7 +1069,7 @@ export default function CalendarView() {
                         y={ROW_H - 9}
                         fontSize={10}
                         fill="#F4F3F6"
-                        fontFamily="JetBrains Mono, monospace"
+                        fontFamily="ui-monospace, monospace"
                         fontWeight="500"
                       >
                         {annualSum.toLocaleString()}
@@ -965,14 +1099,14 @@ export default function CalendarView() {
                   </g>
                 );
               })}
-              <text x={GUTTER - 8} y={TOP + years.length * ROW_H + 16} fontSize={9} fill="#686472" textAnchor="end" fontFamily="JetBrains Mono">
+              <text x={GUTTER - 8} y={TOP + years.length * ROW_H + 16} fontSize={9} fill="#A09CA8" textAnchor="end" fontFamily="ui-monospace">
                 ERA
               </text>
             </svg>
 
             {/* Footnote bar */}
             <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[11px] text-muted border-t border-basalt-300 pt-3">
-              {(Object.keys(PROVENANCE_COLOR) as (keyof typeof PROVENANCE_COLOR)[]).map((p) => (
+              {UNIQUE_PROVENANCE_KEYS.map((p) => (
                 <span key={p} className="flex items-center gap-1.5">
                   <span className="inline-block h-2 w-3 rounded-sm" style={{ background: PROVENANCE_COLOR[p] }} />
                   <span className="text-pewter">{PROVENANCE_LABEL[p]}</span>
@@ -983,6 +1117,48 @@ export default function CalendarView() {
               <span className="text-pewter">
                 {hasWeekly ? "2000–2011: ISO weeks (MODIS transferred); 2012+: Daily calibrated VIIRS." : ""}
               </span>
+            </div>
+            <div className="mt-3">
+              <button
+                type="button"
+                aria-expanded={showCalendarTable}
+                onClick={() => setShowCalendarTable((visible) => !visible)}
+                className="rounded-lg border border-basalt-300 bg-basalt-200 px-3 py-1.5 text-[11px] font-semibold text-pewter hover:border-basalt-400 hover:text-alabaster"
+              >
+                {showCalendarTable ? "Hide" : "View"} calendar data as table ({accessibleCalendarRows.length} periods)
+              </button>
+              {showCalendarTable && (
+                <div className="mt-2 max-h-72 overflow-auto rounded-lg border border-basalt-300">
+                  <table className="min-w-[760px] w-full text-left text-[11px]" aria-label="Calendar fire detections as a text table">
+                    <thead className="sticky top-0 bg-basalt-200 font-mono text-muted">
+                      <tr>
+                        <th scope="col" className="px-2 py-1.5">Period</th>
+                        <th scope="col" className="px-2 py-1.5">Start</th>
+                        <th scope="col" className="px-2 py-1.5">End</th>
+                        <th scope="col" className="px-2 py-1.5">MODIS</th>
+                        <th scope="col" className="px-2 py-1.5">VIIRS</th>
+                        <th scope="col" className="px-2 py-1.5">VIIRS-equivalent / harmonized</th>
+                        <th scope="col" className="px-2 py-1.5">FRP (MW)</th>
+                        <th scope="col" className="px-2 py-1.5">Provenance</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-basalt-300/70 font-mono text-pewter">
+                      {accessibleCalendarRows.map((row) => (
+                        <tr key={`${row.period}-${row.start}-${row.end}`}>
+                          <td className="px-2 py-1">{row.period}</td>
+                          <td className="px-2 py-1">{row.start}</td>
+                          <td className="px-2 py-1">{row.end}</td>
+                          <td className="px-2 py-1">{row.modis == null ? "—" : fmtInt(row.modis)}</td>
+                          <td className="px-2 py-1">{row.viirs == null ? "—" : fmtInt(row.viirs)}</td>
+                          <td className="px-2 py-1">{fmtInt(row.harmonized)}</td>
+                          <td className="px-2 py-1">{row.frp == null ? "—" : fmtMw(row.frp)}</td>
+                          <td className="px-2 py-1 font-sans">{row.provenance}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
           </div>
 
@@ -1197,14 +1373,15 @@ function WeekTooltip({ week, x, y }: { week: TransferredWeek; x: number; y: numb
   );
 }
 
-function Empty({ message, spinner }: { message: string; spinner?: boolean }) {
+function Empty({ message, spinner, onRetry }: { message: string; spinner?: boolean; onRetry?: () => void }) {
   return (
-    <div className="flex h-full items-center justify-center bg-basalt">
-      <div className="flex items-center gap-3 text-sm text-pewter font-display">
+    <div className="flex h-full items-center justify-center bg-basalt p-4">
+      <div className="flex max-w-lg flex-col items-center gap-3 text-center text-sm text-pewter font-display" role={spinner ? "status" : undefined} aria-live={spinner ? "polite" : undefined}>
         {spinner && (
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-basalt-400 border-t-terra" />
         )}
         {message}
+        {onRetry && <button type="button" onClick={onRetry} className="rounded-lg border border-basalt-400 bg-basalt-100 px-4 py-2 text-xs font-semibold text-pewter hover:border-terra/60 hover:text-alabaster">Retry calendar</button>}
       </div>
     </div>
   );

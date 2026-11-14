@@ -6,10 +6,20 @@ import { useStore } from "../store";
 const formatLat = (value: number) => `${Math.abs(value).toFixed(1)}°${value < 0 ? "S" : "N"}`;
 const formatLon = (value: number) => `${Math.abs(value).toFixed(1)}°${value < 0 ? "W" : "E"}`;
 
+type AoiLoadState = "loading" | "ready" | "error";
+
 /** Tier 2 — Full-width horizontal Mission Control & Filter Ribbon.
  * Replaces the fixed left sidebar. Contains: region selector,
  * + Draw AOI, + Lat/Lon BBox, and all filter controls. */
-export default function ControlRibbon() {
+export default function ControlRibbon({
+  aoiLoadState = "loading",
+  aoiLoadError = null,
+  retryAois,
+}: {
+  aoiLoadState?: AoiLoadState;
+  aoiLoadError?: string | null;
+  retryAois?: () => void;
+}) {
   const aois = useStore((s) => s.aois);
   const readOnly = useStore((s) => s.meta?.public_read_only === true);
   const aoiId = useStore((s) => s.aoiId);
@@ -24,6 +34,7 @@ export default function ControlRibbon() {
 
   const [aoiOpen, setAoiOpen] = useState(false);
   const [bboxOpen, setBboxOpen] = useState(false);
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [bboxName, setBboxName] = useState("");
   const [bboxNorth, setBboxNorth] = useState("");
   const [bboxSouth, setBboxSouth] = useState("");
@@ -113,23 +124,23 @@ export default function ControlRibbon() {
   }
 
   return (
-    <div className="relative z-40 flex shrink-0 flex-wrap items-center gap-2.5 border-b border-basalt-300 bg-basalt-100 px-3 py-2 sm:px-4 overflow-visible">
+    <div className="relative z-40 flex shrink-0 flex-wrap items-center gap-2 border-b border-basalt-300 bg-basalt-100 px-3 py-2 sm:gap-2.5 sm:px-4 overflow-visible">
 
       {/* ── Region selector ── */}
-      <div className="relative shrink-0">
+      <div className="relative min-w-0 flex-1 sm:flex-none">
         <button
           onClick={() => { setAoiOpen(!aoiOpen); setBboxOpen(false); }}
           aria-expanded={aoiOpen}
           aria-haspopup="listbox"
           aria-controls="aoi-options"
-          className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors font-display ${
+          className={`flex max-w-full items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors font-display sm:px-3 ${
             aoiOpen
               ? "border-terra bg-terra/10 text-alabaster"
               : "border-basalt-300 bg-basalt-200 text-pewter hover:border-basalt-400 hover:text-alabaster"
           }`}
         >
           <span className="h-2 w-2 rounded-full bg-terra" />
-          <span className="max-w-[200px] truncate">
+          <span className="max-w-[36vw] truncate sm:max-w-[200px]">
               {activeAoi
               ? `${activeAoi.name} · ${formatLat(activeAoi.south)}–${formatLat(activeAoi.north)}`
               : "Select Region"}
@@ -151,6 +162,14 @@ export default function ControlRibbon() {
                 Areas of Interest
               </div>
               <div id="aoi-options" role="listbox" aria-label="Areas of Interest" className="flex max-h-72 flex-col gap-1 overflow-y-auto pr-0.5">
+                {aoiLoadState === "loading" && <div role="status" className="px-2.5 py-2 text-xs text-pewter">Loading areas of interest…</div>}
+                {aoiLoadState === "error" && (
+                  <div role="alert" className="rounded-lg border border-coral/30 bg-coral/10 p-2.5 text-xs text-alabaster">
+                    <p>Could not load areas: {aoiLoadError ?? "API request failed."}</p>
+                    {retryAois && <button type="button" onClick={(event) => { event.stopPropagation(); retryAois(); }} className="mt-2 rounded-md border border-coral/50 px-2.5 py-1 font-semibold text-coral hover:bg-coral/10">Retry areas</button>}
+                  </div>
+                )}
+                {aoiLoadState === "ready" && aois.length === 0 && <div role="status" className="px-2.5 py-2 text-xs text-pewter">No areas are available in this archive.</div>}
                 {aois.map((a) => {
                   const noData = a.has_data === false;
                   return (
@@ -226,14 +245,14 @@ export default function ControlRibbon() {
         type="button"
         disabled={readOnly}
         onClick={() => { setView("map"); setDrawActive(true); setAoiOpen(false); setBboxOpen(false); }}
-        className="shrink-0 rounded-lg border border-dashed border-basalt-400 px-2.5 py-1.5 text-[10px] font-semibold text-muted transition hover:border-terra/60 hover:text-terra font-display tracking-wide disabled:cursor-not-allowed disabled:opacity-40"
+        className={`${mobileFiltersOpen ? "inline-flex" : "hidden"} shrink-0 rounded-lg border border-dashed border-basalt-400 px-2.5 py-1.5 text-[10px] font-semibold text-muted transition hover:border-terra/60 hover:text-terra font-display tracking-wide disabled:cursor-not-allowed disabled:opacity-40 sm:inline-flex`}
         title={readOnly ? "Disabled in public read-only demo mode" : "Switch to map view and draw a polygon AOI"}
       >
         + Draw AOI
       </button>
 
       {/* ── Lat/Lon BBox button + popover ── */}
-      <div className="relative shrink-0">
+      <div className={`${mobileFiltersOpen ? "block" : "hidden"} relative shrink-0 sm:block`}>
         <button
           type="button"
           disabled={readOnly}
@@ -306,8 +325,8 @@ export default function ControlRibbon() {
       <div className="h-5 w-px bg-basalt-300 shrink-0" aria-hidden />
 
       {/* ── Sensor filter ── */}
-      <div className="flex items-center gap-1.5 shrink-0">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Sensor</span>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <span className="hidden text-[10px] font-semibold uppercase tracking-wide text-muted sm:inline">Sensor</span>
         <div className="seg-pill">
           {(["all", "MODIS", "VIIRS"] as const).map((v) => (
             <button
@@ -322,8 +341,18 @@ export default function ControlRibbon() {
         </div>
       </div>
 
+      <button
+        type="button"
+        onClick={() => setMobileFiltersOpen((open) => !open)}
+        aria-expanded={mobileFiltersOpen}
+        aria-label={mobileFiltersOpen ? "Hide secondary filters and AOI tools" : "Show secondary filters and AOI tools"}
+        className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-basalt-300 bg-basalt-200 px-2.5 py-1.5 text-[10px] font-semibold text-pewter hover:border-basalt-400 hover:text-alabaster sm:hidden"
+      >
+        Filters <span aria-hidden>{mobileFiltersOpen ? "−" : "+"}</span>
+      </button>
+
       {/* ── Day/Night filter ── */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className={`${mobileFiltersOpen ? "flex" : "hidden"} shrink-0 items-center gap-1.5 sm:flex`}>
         <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Time</span>
         <div className="seg-pill">
           {(["all", "D", "N"] as const).map((v) => (
@@ -340,7 +369,7 @@ export default function ControlRibbon() {
       </div>
 
       {/* ── Confidence filter ── */}
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className={`${mobileFiltersOpen ? "flex" : "hidden"} shrink-0 items-center gap-1.5 sm:flex`}>
         <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Conf.</span>
         <div className="seg-pill">
         {(["all", "LOW", "NOMINAL", "HIGH"] as const).map((v) => (
@@ -357,7 +386,7 @@ export default function ControlRibbon() {
       </div>
 
       {/* ── Min FRP ── */}
-      <div className="flex items-center gap-1 shrink-0">
+      <div className={`${mobileFiltersOpen ? "flex" : "hidden"} shrink-0 items-center gap-1 sm:flex`}>
         <span className="text-[10px] font-semibold uppercase tracking-wide text-muted">Min FRP</span>
         <div className="flex items-center gap-0.5 rounded-lg border border-basalt-300 bg-basalt-200 px-2 py-1">
           <input
@@ -374,7 +403,7 @@ export default function ControlRibbon() {
       </div>
 
       {/* ── Divider ── */}
-      <div className="h-5 w-px bg-basalt-300 shrink-0" aria-hidden />
+      <div className={`${mobileFiltersOpen ? "block" : "hidden"} h-5 w-px shrink-0 bg-basalt-300 sm:block`} aria-hidden />
 
       {/* ── Toggle pills (sleek button pills, no native browser checkboxes) ── */}
       <button
@@ -382,7 +411,7 @@ export default function ControlRibbon() {
         onClick={() => setFilters({ hideStaticSources: !filters.hideStaticSources })}
         aria-pressed={filters.hideStaticSources}
         title="Exclude persistent type-2 static-source detections from Map and Calendar"
-        className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold transition border shrink-0 ${
+        className={`${mobileFiltersOpen ? "flex" : "hidden"} items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold transition shrink-0 sm:flex ${
           filters.hideStaticSources
             ? "bg-terra/15 border-terra text-alabaster shadow-sm"
             : "bg-basalt-200 border-basalt-300 text-muted hover:border-basalt-400 hover:text-pewter"
@@ -397,7 +426,7 @@ export default function ControlRibbon() {
         onClick={() => setFilters({ anomalyOverlay: !filters.anomalyOverlay })}
         aria-pressed={filters.anomalyOverlay}
         title="Show or hide p95 and unusually quiet anomaly markers in Calendar"
-        className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold transition border shrink-0 ${
+        className={`${mobileFiltersOpen ? "flex" : "hidden"} items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold transition shrink-0 sm:flex ${
           filters.anomalyOverlay
             ? "bg-terra/15 border-terra text-alabaster shadow-sm"
             : "bg-basalt-200 border-basalt-300 text-muted hover:border-basalt-400 hover:text-pewter"

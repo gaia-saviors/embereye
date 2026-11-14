@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "./api/client";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -22,6 +22,9 @@ export default function App() {
   const initRangeFromRecord = useStore((s) => s.initRangeFromRecord);
   const mapToast = useStore((s) => s.mapToast);
   const setMapToast = useStore((s) => s.setMapToast);
+  const [aoiLoadState, setAoiLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [aoiLoadError, setAoiLoadError] = useState<string | null>(null);
+  const [aoiReload, setAoiReload] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -44,36 +47,49 @@ export default function App() {
         .catch(() => {
           if (!alive) return;
           if (attempt <= 6) setTimeout(fetchMeta, 1200 * attempt);
+          else setMapToast("Archive metadata is unavailable. Check the API connection and reload to retry.");
         });
     };
     fetchMeta();
     api
       .health()
       .then((h) => alive && setHealth(h))
-      .catch(() => undefined);
-    api
-      .listAois()
-      .then((aois) => {
-        if (!alive) return;
-        setAois(aois);
-        // Defect 7: default to the first AOI that actually has data.
-        const firstWithData = aois.find((a) => a.has_data) ?? aois[0];
-        if (firstWithData && useStore.getState().aoiId === null) {
-          setAoiId(firstWithData.id);
-        }
-      })
-      .catch(() => undefined);
+      .catch((error) => alive && setMapToast(`Service health unavailable: ${(error as Error).message}`));
     const t = setInterval(() => {
       api
         .health()
         .then((h) => alive && setHealth(h))
-        .catch(() => undefined);
+        .catch((error) => {
+          if (alive && useStore.getState().health === null) {
+            setMapToast(`Service health unavailable: ${(error as Error).message}`);
+          }
+        });
     }, 30_000);
     return () => {
       alive = false;
       clearInterval(t);
     };
-  }, [setMeta, setHealth, setAois, setAoiId, initRangeFromRecord]);
+  }, [setMeta, setHealth, setMapToast, initRangeFromRecord]);
+
+  useEffect(() => {
+    let alive = true;
+    setAoiLoadState("loading");
+    setAoiLoadError(null);
+    api.listAois()
+      .then((aois) => {
+        if (!alive) return;
+        setAois(aois);
+        setAoiLoadState("ready");
+        const firstWithData = aois.find((a) => a.has_data) ?? aois[0];
+        if (firstWithData && useStore.getState().aoiId === null) setAoiId(firstWithData.id);
+      })
+      .catch((error) => {
+        if (!alive) return;
+        setAoiLoadError((error as Error).message);
+        setAoiLoadState("error");
+      });
+    return () => { alive = false; };
+  }, [aoiReload, setAois, setAoiId]);
 
   return (
     <ErrorBoundary>
@@ -81,7 +97,11 @@ export default function App() {
         {/* Tier 1: Primary Navigation Bar */}
         <TopBar />
         {/* Tier 2: Horizontal Mission Control & Filter Ribbon */}
-        <ControlRibbon />
+        <ControlRibbon
+          aoiLoadState={aoiLoadState}
+          aoiLoadError={aoiLoadError}
+          retryAois={() => setAoiReload((attempt) => attempt + 1)}
+        />
         {/* 100% width workspace */}
         <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-hidden">

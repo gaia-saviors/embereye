@@ -92,8 +92,10 @@ if engine.url.get_backend_name() == "sqlite":
     @event.listens_for(engine, "connect")
     def _sqlite_pragmas(dbapi_conn, _record):  # pragma: no cover - env specific
         cursor = dbapi_conn.cursor()
-        cursor.execute(f"PRAGMA journal_mode={get_settings().sqlite_journal_mode}")
-        cursor.execute("PRAGMA synchronous=NORMAL")
+        read_only_uri = str(engine.url.query.get("mode", "")).lower() == "ro"
+        if not (get_settings().public_read_only or read_only_uri):
+            cursor.execute(f"PRAGMA journal_mode={get_settings().sqlite_journal_mode}")
+            cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
 

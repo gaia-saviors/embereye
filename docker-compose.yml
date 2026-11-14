@@ -4,6 +4,11 @@
 # Full stack: PostgreSQL + auto-seeding + FastAPI backend + nginx-served SPA.
 #   docker compose up --build
 #
+# Host-published ports bind to loopback by default. For a public host, use the
+# explicit docker-compose.public.yml override; only Caddy should face the internet.
+# Development fallback credentials are intentionally predictable and MUST NOT
+# be used on a public deployment.
+#
 # Services:
 #   db        PostgreSQL 16 with health check (data persisted in named volume)
 #   backend   FastAPI harmonization + query API (waits for db health)
@@ -21,6 +26,7 @@ x-backend-common: &backend-common
     dockerfile: Dockerfile
   environment: &backend-env
     # --- database ---
+    # These password fallbacks are for local development only.
     EMBEREBEYE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-embereye}:${POSTGRES_PASSWORD:-embereye_dev_pw}@db:5432/${POSTGRES_DB:-embereye}
     # --- data acquisition ---
     FIRMS_MAP_KEY: ${FIRMS_MAP_KEY:-}
@@ -52,15 +58,15 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-embereye}
+      # Local-development fallback only; public override requires a supplied secret.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-embereye_dev_pw}
       POSTGRES_DB: ${POSTGRES_DB:-embereye}
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      # Published for the standalone host run (scripts/backfill_firms.py from
-      # a plain PowerShell): the host backfill writes to the SAME database
-      # the stack uses. Disable with POSTGRES_PORT="" if unwanted.
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Local backfill scripts can use localhost:5432; never bind the DB to all interfaces.
+      # Empty POSTGRES_PORT falls back to 5432; the public override removes this mapping.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-embereye} -d ${POSTGRES_DB:-embereye}"]
       interval: 3s
@@ -80,13 +86,18 @@ services:
   backend:
     <<: *backend-common
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+      seeder:
+        condition: service_completed_successfully
     volumes:
       # FIRMS backfill script (scripts/backfill_firms.py), runnable inside the
       # container: docker compose exec backend python scripts/backfill_firms.py --dry-run
       - ./scripts:/srv/scripts:ro
       - ./scripts:/app/scripts:ro
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "127.0.0.1:${BACKEND_PORT:-8000}:8000"
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)\""]
       interval: 10s
@@ -102,10 +113,10 @@ services:
       args:
         VITE_API_BASE: /api
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      - "127.0.0.1:${FRONTEND_PORT:-8080}:80"
     depends_on:
       backend:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

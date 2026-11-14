@@ -30,6 +30,14 @@ export class ApiError extends Error {
   }
 }
 
+export interface ExportDownload {
+  blob: Blob;
+  filename: string;
+  truncated: boolean;
+  total: number | null;
+  limit: number | null;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let resp: Response;
   try {
@@ -207,4 +215,40 @@ export const api = {
     min_frp?: number;
     hide_static?: boolean;
   }): string => `${BASE}/export${qs(params)}`,
+
+  exportDownload: async (params: {
+    aoi: string;
+    level: string;
+    format: string;
+    start?: string;
+    end?: string;
+    sensor?: string;
+    confidence?: string;
+    daynight?: string;
+    min_frp?: number;
+    hide_static?: boolean;
+  }): Promise<ExportDownload> => {
+    const response = await fetch(`${BASE}/export${qs(params)}`, { headers: { Accept: "text/csv, application/geo+json, application/json" } });
+    if (!response.ok) {
+      let detail = response.statusText;
+      try { detail = (await response.json()).detail ?? detail; } catch { /* retain status text */ }
+      throw new ApiError(response.status, detail);
+    }
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const filenameHeader = disposition.match(/filename\*?=(?:UTF-8''|\")?([^;\"]+)/i)?.[1];
+    const numberHeader = (name: string) => {
+      const value = response.headers.get(name);
+      if (value == null || value.trim() === "") return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const truncatedHeader = response.headers.get("X-Result-Truncated")?.toLowerCase();
+    return {
+      blob: await response.blob(),
+      filename: filenameHeader ? decodeURIComponent(filenameHeader.trim()) : `embereye-${params.level}.${params.format}`,
+      truncated: truncatedHeader === "true" || truncatedHeader === "1" || truncatedHeader === "yes",
+      total: numberHeader("X-Result-Total"),
+      limit: numberHeader("X-Result-Limit"),
+    };
+  },
 };

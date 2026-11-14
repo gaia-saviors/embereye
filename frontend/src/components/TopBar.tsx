@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import { useStore, type ViewName } from "../store";
-import { EMBEREYE_LOGO_DATA_URI } from "../assets/logoData";
+import { EMBEREYE_LOGO_SRC } from "../assets/logo";
 import { clearCalendarCache } from "../lib/calendarCache";
 
 const VIEWS: { id: ViewName; label: string }[] = [
@@ -96,7 +96,7 @@ export default function TopBar() {
         const first = nextMeta.data_source.first_acquisition;
         const last = nextMeta.data_source.last_acquisition;
         if (first && last) initRangeFromRecord(first, last);
-      }).catch(() => undefined);
+      }).catch((error) => setMapToast(`Could not refresh archive metadata: ${(error as Error).message}`));
       setMapToast(`LIVE FETCH ${res.status}: ${res.inserted} rows. ${res.message}`);
     } catch (e) {
       setMapToast(`LIVE FETCH failed: ${(e as Error).message}`);
@@ -106,17 +106,17 @@ export default function TopBar() {
   }
 
   return (
-    <header className="z-40 flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-basalt-300 bg-basalt-100 px-3 py-2 sm:h-14 sm:flex-nowrap sm:gap-5 sm:px-4 sm:py-0">
+    <header className="z-40 grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 border-b border-basalt-300 bg-basalt-100 px-3 py-2 sm:flex sm:h-14 sm:flex-nowrap sm:gap-5 sm:px-4 sm:py-0">
       {/* Left: Logo + wordmark */}
       <div className="flex items-center gap-3 shrink-0">
         <img
-          src={EMBEREYE_LOGO_DATA_URI}
+          src={EMBEREYE_LOGO_SRC}
           alt="EmberEye Project Logo"
           className="h-9 w-9 rounded-xl object-contain ring-1 ring-white/10 shadow-lg"
         />
         <div className="leading-tight">
           <div className="flex items-center gap-2">
-            <span className="font-display text-sm font-bold tracking-[0.15em] text-alabaster">
+            <span className="font-brand text-base font-semibold tracking-[0.08em] text-alabaster">
               EMBEREYE
             </span>
           </div>
@@ -128,7 +128,7 @@ export default function TopBar() {
 
       {/* Center: view switcher pill */}
       <nav
-        className="order-3 mx-auto flex max-w-full items-center gap-[2px] overflow-x-auto rounded-full border border-basalt-300 bg-basalt-200 p-[3px] scrollbar-none sm:order-none"
+        className="row-start-2 col-span-2 mx-auto flex w-full max-w-full items-center justify-center gap-[2px] overflow-x-auto rounded-full border border-basalt-300 bg-basalt-200 p-[3px] scrollbar-none sm:row-auto sm:col-span-1 sm:w-auto sm:flex-1"
         aria-label="views"
       >
         {VIEWS.map((v) => (
@@ -148,10 +148,10 @@ export default function TopBar() {
       </nav>
 
       {/* Right: telemetry + actions */}
-      <div className="flex w-full min-w-0 items-center justify-end gap-1.5 overflow-x-auto scrollbar-none sm:w-auto sm:shrink-0 sm:gap-2 sm:overflow-visible">
+      <div className="row-start-3 col-span-2 flex w-full min-w-0 flex-wrap items-center justify-start gap-1.5 overflow-visible sm:row-auto sm:col-span-1 sm:w-auto sm:shrink-0 sm:flex-nowrap sm:justify-end sm:gap-2">
         {readOnly && (
           <span role="status" className="shrink-0 rounded-md border border-amber/40 bg-amber/10 px-2 py-1.5 font-mono text-[9px] font-bold tracking-wider text-amber">
-            READ-ONLY DEMO
+            <span className="sm:hidden">READ-ONLY</span><span className="hidden sm:inline">READ-ONLY DEMO</span>
           </span>
         )}
         {aoiId && (
@@ -179,7 +179,8 @@ export default function TopBar() {
             title="Archive provenance"
           >
             <span className={`h-1.5 w-1.5 rounded-full ${ds?.kind === "FIRMS_ARCHIVE" ? "bg-jade" : ds?.kind === "MIXED" ? "bg-amber" : "bg-terra"}`} />
-            {archiveLabel}
+            <span className="truncate sm:hidden">{sourceShort} · {firstYear}–{lastYear}</span>
+            <span className="hidden sm:inline">{archiveLabel}</span>
           </button>
           {showInfo && ds && (
             <div role="dialog" aria-label="Archive provenance details" className="absolute right-0 top-9 z-50 w-80 max-w-[90vw] rounded-xl border border-basalt-300 bg-basalt-100 p-3.5 text-[11px] leading-relaxed text-pewter shadow-2xl">
@@ -215,8 +216,8 @@ export default function TopBar() {
           type="button"
           onClick={() => setMethodsOpen(true)}
           className="rounded-md border border-basalt-300 bg-basalt-200 px-3 py-1.5 text-[11px] font-semibold text-pewter hover:text-alabaster hover:border-basalt-400 transition-colors font-display tracking-wide"
-        >
-          Methodology
+          >
+          <span className="sm:hidden">Methods</span><span className="hidden sm:inline">Methodology</span>
         </button>
 
         {/* Export Dropdown (Dual CSV + GeoJSON) */}
@@ -249,6 +250,9 @@ export default function TopBar() {
                 <div className="px-2.5 py-1 text-[9px] font-mono font-bold tracking-widest text-muted uppercase">
                   Export Dataset
                 </div>
+                <p className="px-2.5 pb-1.5 text-[9px] leading-relaxed text-muted">
+                  Hotspot CSV/GeoJSON exports are capped at 500,000 detections; narrow filters for very large AOIs.
+                </p>
                 <button
                   type="button"
                   role="menuitem"

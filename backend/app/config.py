@@ -18,10 +18,13 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "EmberEye"
-    app_version: str = "1.0.10"
+    app_version: str = "1.1.0"
     seed_version: str = "2026.10.1"
     log_level: str = "INFO"
-    cors_origins: str = "*"
+    cors_origins: str = Field(
+        default="*",
+        validation_alias=AliasChoices("EMBEREBEYE_CORS_ORIGINS", "CORS_ORIGINS"),
+    )
     public_read_only: bool = False
 
     # --- persistence -------------------------------------------------------
