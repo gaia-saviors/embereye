@@ -20,38 +20,15 @@ FROM nginx:1.31-alpine
 
 RUN set -eu; \
     mime=/etc/nginx/mime.types; \
-    awk '
-      /^[[:space:]]*application\/javascript([[:space:]]|$)/ {
-        found = 1
-        if ($0 !~ /(^|[[:space:]])mjs[[:space:]]*;/) {
-          if ($0 !~ /;/) {
-            print "ERROR: malformed application/javascript mapping in /etc/nginx/mime.types" > "/dev/stderr"
-            exit 1
-          }
-          sub(/[[:space:]]*;/, " mjs;")
-        }
-      }
-      { print }
-      END {
-        if (!found) {
-          print "ERROR: application/javascript mapping not found in /etc/nginx/mime.types" > "/dev/stderr"
-          exit 1
-        }
-      }
-    ' "$mime" > "$mime.tmp"; \
-    mv "$mime.tmp" "$mime"; \
-    awk '
-      /^[[:space:]]*application\/javascript([[:space:]]|$)/ {
-        found = 1
-        if ($0 ~ /(^|[[:space:]])mjs[[:space:]]*;/) has_mjs = 1
-      }
-      END {
-        if (!found || !has_mjs) {
-          print "ERROR: failed to configure .mjs as application/javascript" > "/dev/stderr"
-          exit 1
-        }
-      }
-    ' "$mime"
+    if ! grep -Eq '^[[:space:]]*application/javascript([[:space:]]|$)' "$mime"; then \
+      echo "ERROR: application/javascript mapping not found in $mime" >&2; exit 1; \
+    fi; \
+    if ! grep -Eq '^[[:space:]]*application/javascript[[:space:]].*[[:space:]]mjs[[:space:]]*;' "$mime"; then \
+      sed -i '/^[[:space:]]*application\/javascript[[:space:]]/s/[[:space:]]*;/ mjs;/' "$mime"; \
+    fi; \
+    if ! grep -Eq '^[[:space:]]*application/javascript[[:space:]].*[[:space:]]mjs[[:space:]]*;' "$mime"; then \
+      echo "ERROR: failed to configure .mjs as application/javascript in $mime" >&2; exit 1; \
+    fi
 
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY ratelimit-zone.conf /etc/nginx/conf.d/00-ratelimit-zone.conf
