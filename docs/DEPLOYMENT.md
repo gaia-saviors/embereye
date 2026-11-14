@@ -6,7 +6,9 @@ This guide is a minimal single-Linux-host deployment for the GHCR images. It is 
 
 The repository and the two GHCR packages have separate visibility settings. Making the repository public does **not** automatically make the container packages public. Before submission, change the visibility of both `embereye-backend` and `embereye-frontend` to **Public** in their GitHub Packages settings. Public GHCR container packages can then be pulled anonymously. While a package remains private, use a classic GitHub PAT with `read:packages` to pull it. [1] [2]
 
-The project currently has no user authentication or API rate limiting. Its API includes unauthenticated AOI creation, deletion, rebuild, and live-fetch routes. Binding the backend and database ports to loopback protects those ports from direct internet access, but the frontend still proxies `/api`; it does **not** make those write routes read-only. Before advertising an unrestricted public demo, add an application read-only/authentication control and rate limiting for write routes. Do not treat this Compose guide as security hardening.
+The application has no user accounts. For a public view-only demo, set `PUBLIC_READ_ONLY=true`: the backend rejects `POST`, `PUT`, `PATCH`, and `DELETE` requests under `/api` with HTTP 403, and the UI labels the demo and disables AOI creation/deletion and live fetch. The frontend Nginx also limits `/api` to 20 requests/second per client, with a burst of 40. In this Caddy setup, Caddy sanitizes and sets `X-Forwarded-For` by default; Nginx uses that value for the limiter. [5]
+
+Read-only mode still has no login and does not prevent excessive read traffic. Keep the documented reverse-proxy setup, retain the rate limit, and add an edge firewall/WAF if the host or audience needs stronger protection. Do not turn `PUBLIC_READ_ONLY` off on an unauthenticated public deployment.
 
 ## Deploy the seeded demo on one Linux host
 
@@ -24,8 +26,9 @@ openssl rand -hex 32
 Edit `.env` and set a unique `POSTGRES_PASSWORD` to the generated value. Also set these production values:
 
 ```dotenv
-EMBEREYE_IMAGE_TAG=v1.0.9
+EMBEREYE_IMAGE_TAG=v1.0.10
 DATA_MODE=SEED
+PUBLIC_READ_ONLY=true
 BACKEND_PORT=127.0.0.1:8000
 FRONTEND_PORT=127.0.0.1:8080
 POSTGRES_PORT=127.0.0.1:5432
@@ -99,3 +102,4 @@ The override disables the seeder and mounts the SQLite file read-write. Back up 
 [2]: https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry "GitHub Docs: Working with the container registry"
 [3]: https://docs.docker.com/compose/how-tos/production/ "Docker Docs: Use Compose in production"
 [4]: https://caddyserver.com/docs/quick-starts/reverse-proxy "Caddy Docs: Reverse proxy quick-start"
+[5]: https://caddyserver.com/docs/caddyfile/directives/reverse_proxy "Caddy Docs: Reverse proxy headers"

@@ -119,6 +119,7 @@ class MetaResponse(BaseModel):
     name: str
     tagline: str
     version: str
+    public_read_only: bool = False
     seed_version: str
     data_mode: DataMode
     effective_data_mode: Literal["LIVE", "SEED"]

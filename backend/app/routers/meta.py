@@ -265,6 +265,7 @@ def meta(db: Session = Depends(get_db)) -> MetaResponse:
         name="EmberEye",
         tagline="One planet, one fire record - MODIS + VIIRS harmonized since 2012.",
         version=cfg.app_version,
+        public_read_only=cfg.public_read_only,
         seed_version=seed_version,
         data_mode=cfg.data_mode.upper(),  # type: ignore[arg-type]
         effective_data_mode=effective,  # type: ignore[arg-type]

@@ -40,6 +40,7 @@ x-backend-common: &backend-common
     SEAM_END: ${SEAM_END:-2014-12-31}
     # --- app ---
     EMBEREBEYE_CORS_ORIGINS: ${EMBEREBEYE_CORS_ORIGINS:-*}
+    PUBLIC_READ_ONLY: ${PUBLIC_READ_ONLY:-false}
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
   depends_on:
     db:

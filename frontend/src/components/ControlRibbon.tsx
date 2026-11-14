@@ -11,6 +11,7 @@ const formatLon = (value: number) => `${Math.abs(value).toFixed(1)}°${value < 0
  * + Draw AOI, + Lat/Lon BBox, and all filter controls. */
 export default function ControlRibbon() {
   const aois = useStore((s) => s.aois);
+  const readOnly = useStore((s) => s.meta?.public_read_only === true);
   const aoiId = useStore((s) => s.aoiId);
   const setAoiId = useStore((s) => s.setAoiId);
   const setAois = useStore((s) => s.setAois);
@@ -42,6 +43,13 @@ export default function ControlRibbon() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [aoiOpen, bboxOpen]);
 
+  useEffect(() => {
+    if (!readOnly) return;
+    setAoiOpen(false);
+    setBboxOpen(false);
+    setDrawActive(false);
+  }, [readOnly, setDrawActive]);
+
   const activeAoi = aois.find((a) => a.id === aoiId);
 
   async function refreshCreatedAoi(id: string, jobId?: string | null) {
@@ -69,6 +77,7 @@ export default function ControlRibbon() {
 
   async function handleCreateBbox(e: React.FormEvent) {
     e.preventDefault();
+    if (readOnly) return;
     const n = parseFloat(bboxNorth);
     const s = parseFloat(bboxSouth);
     const w = parseFloat(bboxWest);
@@ -182,6 +191,7 @@ export default function ControlRibbon() {
                       {!a.is_preset && (
                         <button
                           type="button"
+                          disabled={readOnly}
                           onClick={async (e) => {
                             e.stopPropagation();
                             if (!window.confirm(`Delete custom AOI “${a.name}” and its derived data? This cannot be undone.`)) return;
@@ -195,9 +205,9 @@ export default function ControlRibbon() {
                               setMapToast(`Could not delete AOI: ${(err as Error).message}`);
                             }
                           }}
-                          className="shrink-0 rounded-md px-2 py-1.5 font-mono text-[9px] text-muted hover:bg-coral/10 hover:text-coral focus-visible:outline focus-visible:outline-2 focus-visible:outline-coral"
+                          className="shrink-0 rounded-md px-2 py-1.5 font-mono text-[9px] text-muted hover:bg-coral/10 hover:text-coral focus-visible:outline focus-visible:outline-2 focus-visible:outline-coral disabled:cursor-not-allowed disabled:opacity-40"
                           aria-label={`Delete custom AOI ${a.name}`}
-                          title={`Delete ${a.name}`}
+                          title={readOnly ? "Disabled in public read-only demo mode" : `Delete ${a.name}`}
                         >
                           DEL
                         </button>
@@ -213,9 +223,11 @@ export default function ControlRibbon() {
 
       {/* ── Draw AOI button ── */}
       <button
+        type="button"
+        disabled={readOnly}
         onClick={() => { setView("map"); setDrawActive(true); setAoiOpen(false); setBboxOpen(false); }}
-        className="shrink-0 rounded-lg border border-dashed border-basalt-400 px-2.5 py-1.5 text-[10px] font-semibold text-muted transition hover:border-terra/60 hover:text-terra font-display tracking-wide"
-        title="Switch to map view and draw a polygon AOI"
+        className="shrink-0 rounded-lg border border-dashed border-basalt-400 px-2.5 py-1.5 text-[10px] font-semibold text-muted transition hover:border-terra/60 hover:text-terra font-display tracking-wide disabled:cursor-not-allowed disabled:opacity-40"
+        title={readOnly ? "Disabled in public read-only demo mode" : "Switch to map view and draw a polygon AOI"}
       >
         + Draw AOI
       </button>
@@ -223,16 +235,18 @@ export default function ControlRibbon() {
       {/* ── Lat/Lon BBox button + popover ── */}
       <div className="relative shrink-0">
         <button
+          type="button"
+          disabled={readOnly}
           onClick={() => { setBboxOpen(!bboxOpen); setAoiOpen(false); }}
           aria-expanded={bboxOpen}
           aria-haspopup="dialog"
           aria-controls="bbox-form"
-          className={`rounded-lg border border-dashed px-2.5 py-1.5 text-[10px] font-semibold transition font-display tracking-wide ${
+          className={`rounded-lg border border-dashed px-2.5 py-1.5 text-[10px] font-semibold transition font-display tracking-wide disabled:cursor-not-allowed disabled:opacity-40 ${
             bboxOpen
               ? "border-terra/60 text-terra"
               : "border-basalt-400 text-muted hover:border-terra/60 hover:text-terra"
           }`}
-          title="Enter exact lat/lon bounding box coordinates"
+          title={readOnly ? "Disabled in public read-only demo mode" : "Enter exact lat/lon bounding box coordinates"}
         >
           + Lat/Lon BBox
         </button>
@@ -277,7 +291,7 @@ export default function ControlRibbon() {
                 </div>
                 <button
                   type="submit"
-                  disabled={bboxSubmitting}
+                  disabled={readOnly || bboxSubmitting}
                   className="mt-1 rounded-lg bg-terra py-1.5 font-bold text-xs text-alabaster transition hover:bg-ember-400 disabled:opacity-50 shadow-sm"
                 >
                   {bboxSubmitting ? "Creating…" : "Create BBox AOI"}

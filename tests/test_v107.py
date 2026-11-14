@@ -134,6 +134,34 @@ def test_intra_viirs_methodology_documented():
     assert "f_day" in combined_steps
 
 
+def test_public_read_only_blocks_api_writes(monkeypatch):
+    """Public mode must reject every mutating API method before route work."""
+    meta_route = next(route for route in app.routes if getattr(route, "path", None) == "/api/meta")
+    meta_globals = meta_route.endpoint.__globals__
+    cfg = meta_globals["get_settings"]()
+    monkeypatch.setattr(cfg, "public_read_only", True)
+    monkeypatch.setitem(meta_globals, "get_settings", lambda: cfg)
+    guard = next(
+        middleware.kwargs["dispatch"]
+        for middleware in app.user_middleware
+        if getattr(middleware.kwargs.get("dispatch"), "__name__", "") == "public_read_only_guard"
+    )
+    monkeypatch.setitem(guard.__globals__, "get_settings", lambda: cfg)
+    assert client.get("/api/meta").json()["public_read_only"] is True
+    assert client.get("/api/health").status_code == 200
+
+    requests = [
+        ("post", "/api/aois", {"name": "blocked", "geojson": {}}),
+        ("post", "/api/aois/example/rebuild", {}),
+        ("delete", "/api/aois/example", None),
+        ("post", "/api/live/fetch", {"aoi_id": "example"}),
+    ]
+    for method, path, payload in requests:
+        response = getattr(client, method)(path, json=payload) if payload is not None else getattr(client, method)(path)
+        assert response.status_code == 403, (method, path, response.text)
+        assert "read-only" in response.json()["detail"].lower()
+
+
 def test_create_aoi_runs_aggregation_job(monkeypatch):
     """Regression: POST /api/aois used to fail its background job with
     ``NameError: name 'func' is not defined`` (missing SQLAlchemy import).

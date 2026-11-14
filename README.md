@@ -283,7 +283,7 @@ git clone https://github.com/3lyly0/embereye-spaceapps.git
 cd embereye-spaceapps
 cp .env.example .env
 # Optional: pin an exact release; omit to use the latest published tag.
-echo 'EMBEREYE_IMAGE_TAG=v1.0.9' >> .env
+echo 'EMBEREYE_IMAGE_TAG=v1.0.10' >> .env
 # While the packages are private, log in with a classic PAT (read:packages).
 # Omit this command after both GHCR packages have been made Public.
 docker login ghcr.io -u 3lyly0
@@ -300,10 +300,10 @@ synthetic demo archive. The UI marks it as synthetic; it is not NASA observation
 To run the Nile Delta real-data snapshot instead, use the SQLite archive option
 below with the same prebuilt images.
 
-For a public Linux host with loopback-bound service ports and a Caddy HTTPS
-reverse proxy, see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The current
-application has no user authentication; review the public-demo security note in
-that guide before opening interactive write actions to untrusted visitors.
+For a public Linux host with loopback-bound service ports, `PUBLIC_READ_ONLY=true`,
+API rate limiting, and a Caddy HTTPS reverse proxy, see
+[`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). The application has no user accounts;
+keep public deployments view-only unless authentication is added.
 
 ### Option A — Build the full stack from source
 
@@ -461,7 +461,7 @@ If you use EmberEye, please cite the repository using
   author  = {{Team Gaia Saviors}},
   title   = {EmberEye: Harmonization of MODIS and VIIRS Hot Spots},
   year    = {2026},
-  version = {1.0.9},
+  version = {1.0.10},
   license = {MIT},
   url     = {https://github.com/3lyly0/embereye-spaceapps}
 }

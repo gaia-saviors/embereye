@@ -130,6 +130,7 @@ export default function MapView() {
   const setMapToast = useStore((s) => s.setMapToast);
   const playing = useStore((s) => s.playing);
   const drawActive = useStore((s) => s.drawActive);
+  const readOnly = useStore((s) => s.meta?.public_read_only === true);
   const setDrawActive = useStore((s) => s.setDrawActive);
 
   const [snap, setSnap] = useState<SnapshotData | null>(null);
@@ -159,12 +160,20 @@ export default function MapView() {
   }, []);
 
   useEffect(() => {
+    if (readOnly) {
+      setDrawActive(false);
+      if (drawModeRef.current !== "off") {
+        setDrawMode("off");
+        (mapRef.current?.getSource("draw") as maplibregl.GeoJSONSource | undefined)?.setData(EMPTY_FC);
+      }
+      return;
+    }
     if (drawActive) {
       setDrawMode("polygon");
       setMapToast("Drawing AOI: Click vertices on the map, press Enter to finish or Esc to cancel.");
       setDrawActive(false);
     }
-  }, [drawActive, setDrawMode, setMapToast, setDrawActive]);
+  }, [drawActive, readOnly, setDrawMode, setMapToast, setDrawActive]);
 
   // ---- map init -----------------------------------------------------------
   useEffect(() => {
@@ -577,6 +586,10 @@ export default function MapView() {
   // AOI Creation
   const createAoiFromRing = useCallback(
     async (ring: number[][]) => {
+      if (readOnly || useStore.getState().meta?.public_read_only) {
+        setMapToast("AOI creation is disabled in this public read-only demo.");
+        return;
+      }
       try {
         const created = await api.createAoi(
           `AOI ${new Date().toISOString().slice(5, 16).replace("T", " ")}`,
@@ -592,7 +605,7 @@ export default function MapView() {
         setMapToast(`AOI creation failed: ${(e as Error).message}`);
       }
     },
-    [setMapToast],
+    [readOnly, setMapToast],
   );
 
   async function pollUntilReady(id: string, jobId?: string | null) {
@@ -624,8 +637,9 @@ export default function MapView() {
     const ring = [...drawPts.current, drawPts.current[0]];
     setDrawMode("off");
     (mapRef.current?.getSource("draw") as maplibregl.GeoJSONSource | undefined)?.setData(EMPTY_FC);
+    if (readOnly || useStore.getState().meta?.public_read_only) return;
     await createAoiFromRing(ring);
-  }, [createAoiFromRing, setDrawMode]);
+  }, [createAoiFromRing, readOnly, setDrawMode]);
 
   // Shift-drag bbox drawing
   useEffect(() => {
@@ -634,7 +648,7 @@ export default function MapView() {
     let start: [number, number] | null = null;
 
     const onDown = (e: maplibregl.MapMouseEvent) => {
-      if (drawModeRef.current === "polygon" || !e.originalEvent.shiftKey) return;
+      if (readOnly || drawModeRef.current === "polygon" || !e.originalEvent.shiftKey) return;
       e.preventDefault();
       start = [e.lngLat.lng, e.lngLat.lat];
       map.dragPan.disable();
@@ -665,12 +679,12 @@ export default function MapView() {
     return () => {
       map.off("mousedown", onDown);
     };
-  }, [mapReady, createAoiFromRing]);
+  }, [mapReady, createAoiFromRing, readOnly]);
 
   // Polygon drawing via click points
   useEffect(() => {
       const onKey = async (e: KeyboardEvent) => {
-        if (drawModeRef.current !== "polygon") return;
+        if (readOnly || drawModeRef.current !== "polygon") return;
         const target = e.target;
       if (target instanceof HTMLElement && target.closest("input, textarea, select")) return;
       if (e.key === "Escape") {
@@ -686,11 +700,11 @@ export default function MapView() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [finishPolygon, setDrawMode]);
+  }, [finishPolygon, readOnly, setDrawMode]);
 
   const onMapClick = useCallback(
     (e: maplibregl.MapMouseEvent) => {
-      if (drawModeRef.current !== "polygon") return;
+      if (readOnly || drawModeRef.current !== "polygon") return;
       drawPts.current.push([Number(e.lngLat.lng.toFixed(4)), Number(e.lngLat.lat.toFixed(4))]);
       const pts = drawPts.current;
       setDrawPointCount(pts.length);
@@ -708,7 +722,7 @@ export default function MapView() {
         } : EMPTY_FC,
       );
     },
-    [],
+    [readOnly],
   );
 
   useEffect(() => {

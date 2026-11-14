@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .config import get_settings
 from .db import create_all, describe_url
@@ -30,6 +31,22 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         openapi_url="/openapi.json",
     )
+    @app.middleware("http")
+    async def public_read_only_guard(request: Request, call_next):
+        cfg = get_settings()
+        if (
+            cfg.public_read_only
+            and request.url.path.startswith("/api/")
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "This public EmberEye demo is read-only."},
+                headers={"Cache-Control": "no-store"},
+            )
+        return await call_next(request)
+
+    # Added after the guard so CORS wraps and decorates its 403 responses too.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cfg.cors_origin_list,

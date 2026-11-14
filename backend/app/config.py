@@ -18,10 +18,11 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "EmberEye"
-    app_version: str = "1.0.9"
+    app_version: str = "1.0.10"
     seed_version: str = "2026.10.1"
     log_level: str = "INFO"
     cors_origins: str = "*"
+    public_read_only: bool = False
 
     # --- persistence -------------------------------------------------------
     # Compose injects EMBEREBEYE_DATABASE_URL (Postgres). Local dev/tests

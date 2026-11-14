@@ -54,6 +54,7 @@ export default function TopBar() {
   }, [showInfo, exportOpen]);
 
   const ds = meta?.data_source;
+  const readOnly = meta?.public_read_only === true;
   const nPts = ds?.n_hotspots ?? 0;
   const firstYear = ds?.first_acquisition?.slice(0, 4) ?? "2000";
   const lastYear = ds?.last_acquisition?.slice(0, 4) ?? "2026";
@@ -148,15 +149,20 @@ export default function TopBar() {
 
       {/* Right: telemetry + actions */}
       <div className="flex w-full min-w-0 items-center justify-end gap-1.5 overflow-x-auto scrollbar-none sm:w-auto sm:shrink-0 sm:gap-2 sm:overflow-visible">
+        {readOnly && (
+          <span role="status" className="shrink-0 rounded-md border border-amber/40 bg-amber/10 px-2 py-1.5 font-mono text-[9px] font-bold tracking-wider text-amber">
+            READ-ONLY DEMO
+          </span>
+        )}
         {aoiId && (
           <button
             onClick={onLiveFetch}
-            disabled={liveBusy || health?.firms.key_configured === false}
-            aria-label={health?.firms.key_configured === false ? "Live fetch unavailable: configure FIRMS_MAP_KEY" : "Fetch the last two days from NASA FIRMS"}
-            className={`rounded-lg border px-2.5 py-1.5 font-display text-[10px] font-bold transition-colors tracking-wide disabled:opacity-70 ${health?.firms.key_configured === false ? "border-amber/40 bg-amber/10 text-amber" : "border-jade/40 bg-jade/10 text-jade hover:bg-jade/20"}`}
-            title={health?.firms.key_configured === false ? "Configure FIRMS_MAP_KEY to enable live NASA FIRMS fetch" : "Fetch last 2 days from NASA FIRMS"}
+            disabled={readOnly || liveBusy || health?.firms.key_configured === false}
+            aria-label={readOnly ? "Live fetch disabled in public read-only mode" : health?.firms.key_configured === false ? "Live fetch unavailable: configure FIRMS_MAP_KEY" : "Fetch the last two days from NASA FIRMS"}
+            className={`rounded-lg border px-2.5 py-1.5 font-display text-[10px] font-bold transition-colors tracking-wide disabled:opacity-70 ${readOnly || health?.firms.key_configured === false ? "border-amber/40 bg-amber/10 text-amber" : "border-jade/40 bg-jade/10 text-jade hover:bg-jade/20"}`}
+            title={readOnly ? "Disabled in public read-only demo mode" : health?.firms.key_configured === false ? "Configure FIRMS_MAP_KEY to enable live NASA FIRMS fetch" : "Fetch last 2 days from NASA FIRMS"}
           >
-            {liveBusy ? "Fetching…" : health?.firms.key_configured === false
+            {readOnly ? "Read-only" : liveBusy ? "Fetching…" : health?.firms.key_configured === false
               ? <><span className="sm:hidden">Key needed</span><span className="hidden sm:inline">FIRMS key needed</span></>
               : <><span className="sm:hidden">Live 2d</span><span className="hidden sm:inline">Live Fetch (2d)</span></>}
           </button>

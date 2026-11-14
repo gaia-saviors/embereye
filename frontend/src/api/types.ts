@@ -111,6 +111,7 @@ export interface MetaResponse {
   name: string;
   tagline: string;
   version: string;
+  public_read_only: boolean;
   seed_version: string;
   data_mode: DataMode;
   effective_data_mode: "LIVE" | "SEED";
