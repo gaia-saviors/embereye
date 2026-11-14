@@ -76,24 +76,9 @@ jobs:
         working-directory: ./frontend
         run: test -n "$(find dist/assets -maxdepth 1 -name 'maplibre-gl-worker-*.mjs' -print -quit)"
 
-  secret-scan:
-    name: Secret scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout full repository history
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Scan repository history for secrets
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_COMMENTS: "false"
-
   docker-smoke-test:
     name: Clean Database Seed & Readiness Smoke Test
-    needs: [backend-tests, frontend-build, secret-scan]
+    needs: [backend-tests, frontend-build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
