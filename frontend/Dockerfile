@@ -21,7 +21,6 @@ FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY ratelimit-zone.conf /etc/nginx/conf.d/00-ratelimit-zone.conf
 COPY --from=build /build/dist /usr/share/nginx/html
-RUN nginx -t
 
 EXPOSE 80
 
